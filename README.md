@@ -1,5 +1,6 @@
 # Visual-Generative-Foundation-Model-Collection
 
+[![🤗 Collection](https://img.shields.io/badge/🤗%20Collection-Visual%20Generation%20Models-yellow?logo=huggingface)](https://huggingface.co/collections/BiliSakura/visual-generation-models)
 
 > [!IMPORTANT]
 > We only hold the core publicly available ones pre-trained on ImageNet.
@@ -16,7 +17,7 @@ A selected collection of CORE visual generative foundation model including code,
       <th align="left" rowspan="2">Model</th>
       <th align="center" colspan="3" style="border-bottom:1px solid #ccc;">Compute</th>
       <th align="center" colspan="4" style="border-bottom:1px solid #ccc;">Quality</th>
-      <th align="left" rowspan="2">Links</th>
+      <th align="center" colspan="3" style="border-bottom:1px solid #ccc;">Links</th>
     </tr>
     <tr>
       <th align="right">#Param</th>
@@ -26,11 +27,14 @@ A selected collection of CORE visual generative foundation model including code,
       <th align="right">IS</th>
       <th align="right">Precision</th>
       <th align="right">Recall</th>
+      <th align="left">Code</th>
+      <th align="left">Paper</th>
+      <th align="left">Model</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td colspan="9" align="left" style="background-color:#dbeafe;font-weight:600;border-top:2px solid #3b82f6;">Pixel modeling</td>
+      <td colspan="11" align="left" style="background-color:#dbeafe;font-weight:600;border-top:2px solid #3b82f6;">Pixel modeling</td>
     </tr>
     <!--
     <tr>
@@ -44,7 +48,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.62</td>
       <td align="left">
         <a href="https://github.com/openai/improved-diffusion"><img src="https://img.shields.io/badge/Official%20Code-improved--diffusion-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://proceedings.mlr.press/v139/nichol21a.html"><img src="https://img.shields.io/badge/Paper-ICML%202021-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -57,8 +65,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">161.0</td>
       <td align="right"></td>
       <td align="right"></td>
+      <td align="left"></td>
       <td align="left">
         <a href="https://proceedings.mlr.press/v202/jabri23a.html"><img src="https://img.shields.io/badge/Paper-ICML%202023-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -74,8 +85,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.52</td>
       <td align="left">
         <a href="https://github.com/openai/guided-diffusion"><img src="https://img.shields.io/badge/Official%20Code-guided--diffusion-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/ADM-diffusers"><img src="https://img.shields.io/badge/Diffusers-ADM--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://proceedings.neurips.cc/paper_files/paper/2021/hash/49ad23d1ec9fa4bd8d77d02681df5cfa-Abstract.html"><img src="https://img.shields.io/badge/Paper-NeurIPS%202021-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -90,7 +104,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.60</td>
       <td align="left">
         <a href="https://github.com/ShoufaChen/PixelFlow"><img src="https://img.shields.io/badge/Official%20Code-PixelFlow-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2504.07963"><img src="https://img.shields.io/badge/Paper-arXiv%202025-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/ShoufaChen/PixelFlow-Class2Image"><img src="https://img.shields.io/badge/🤗%20Model-PixelFlow--Class2Image-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -105,8 +123,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/LTH14/JiT"><img src="https://img.shields.io/badge/Official%20Code-JiT-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/JiT-diffusers"><img src="https://img.shields.io/badge/Diffusers-JiT--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2511.13720"><img src="https://img.shields.io/badge/Paper-arXiv%202025-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/JiT-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-JiT--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -121,8 +142,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/MCG-NJU/PixNerd"><img src="https://img.shields.io/badge/Official%20Code-PixNerd-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/PixNerd-diffusers"><img src="https://img.shields.io/badge/Diffusers-PixNerd--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openreview.net/forum?id=BDnOrExHmt"><img src="https://img.shields.io/badge/Paper-ICLR%202026-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/PixNerd-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-PixNerd--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -137,12 +161,16 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.62</td>
       <td align="left">
         <a href="https://github.com/Zehong-Ma/DeCo"><img src="https://img.shields.io/badge/Official%20Code-DeCo-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2511.19365"><img src="https://img.shields.io/badge/Paper-CVPR%202026-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/zehongma/DeCo"><img src="https://img.shields.io/badge/🤗%20Model-DeCo-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
     <tr>
-      <td colspan="9" align="left" style="background-color:#ede9fe;font-weight:600;border-top:2px solid #8b5cf6;">Latent modeling</td>
+      <td colspan="11" align="left" style="background-color:#ede9fe;font-weight:600;border-top:2px solid #8b5cf6;">Latent modeling</td>
     </tr>
     <tr>
       <td align="left">DiT-XL/2-G</td>
@@ -155,7 +183,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.57</td>
       <td align="left">
         <a href="https://github.com/facebookresearch/DiT"><img src="https://img.shields.io/badge/Official%20Code-DiT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openaccess.thecvf.com/content/ICCV2023/html/Peebles_Scalable_Diffusion_Models_with_Transformers_ICCV_2023_paper.html"><img src="https://img.shields.io/badge/Paper-ICCV%202023-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/facebook/DiT-XL-2-256"><img src="https://img.shields.io/badge/🤗%20Model-DiT--XL--2--256-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -170,7 +202,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.61</td>
       <td align="left">
         <a href="https://github.com/sail-sg/MDT/tree/mdtv1"><img src="https://img.shields.io/badge/Official%20Code-MDT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2303.14389"><img src="https://img.shields.io/badge/Paper-arXiv%202023-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/shgao/MDT-XL2"><img src="https://img.shields.io/badge/🤗%20Model-MDT--XL2-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -185,7 +221,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.65</td>
       <td align="left">
         <a href="https://github.com/sail-sg/MDT"><img src="https://img.shields.io/badge/Official%20Code-MDT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2303.14389"><img src="https://img.shields.io/badge/Paper-arXiv%202023-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/shgao/MDT-XL2"><img src="https://img.shields.io/badge/🤗%20Model-MDT--XL2-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -200,7 +240,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.51</td>
       <td align="left">
         <a href="https://github.com/whlzy/FiT"><img src="https://img.shields.io/badge/Official%20Code-FiT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openreview.net/forum?id=jZVen2JguY"><img src="https://img.shields.io/badge/Paper-ICML%202024-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -215,8 +259,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.59</td>
       <td align="left">
         <a href="https://github.com/willisma/SiT"><img src="https://img.shields.io/badge/Official%20Code-SiT-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/SiT-diffusers"><img src="https://img.shields.io/badge/Diffusers-SiT--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://link.springer.com/10.1007/978-3-031-72980-5_2"><img src="https://img.shields.io/badge/Paper-ECCV%202024-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/SiT-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-SiT--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -231,7 +278,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.66</td>
       <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Official%20Code-TBD-181717?logo=github" alt="Official Code (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Paper-TBD-B31B1B" alt="Paper (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -246,7 +297,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.59</td>
       <td align="left">
         <a href="https://github.com/whlzy/FiT"><img src="https://img.shields.io/badge/Official%20Code-FiT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2410.13925"><img src="https://img.shields.io/badge/Paper-arXiv%202024-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -261,7 +316,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Official%20Code-TBD-181717?logo=github" alt="Official Code (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Paper-TBD-B31B1B" alt="Paper (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -276,7 +335,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Official%20Code-TBD-181717?logo=github" alt="Official Code (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Paper-TBD-B31B1B" alt="Paper (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -291,7 +354,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Official%20Code-TBD-181717?logo=github" alt="Official Code (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Paper-TBD-B31B1B" alt="Paper (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -306,8 +373,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/WZDTHU/NiT"><img src="https://img.shields.io/badge/Official%20Code-NiT-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/NiT-diffusers"><img src="https://img.shields.io/badge/Diffusers-NiT--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openreview.net/forum?id=QWQB1ReBkJ"><img src="https://img.shields.io/badge/Paper-NeurIPS%202025-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/NiT-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-NiT--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -322,7 +392,7 @@ A selected collection of CORE visual generative foundation model including code,
       <th align="left" rowspan="2">Model</th>
       <th align="center" colspan="3" style="border-bottom:1px solid #ccc;">Compute</th>
       <th align="center" colspan="4" style="border-bottom:1px solid #ccc;">Quality</th>
-      <th align="left" rowspan="2">Links</th>
+      <th align="center" colspan="3" style="border-bottom:1px solid #ccc;">Links</th>
     </tr>
     <tr>
       <th align="right">#Param</th>
@@ -332,11 +402,14 @@ A selected collection of CORE visual generative foundation model including code,
       <th align="right">IS</th>
       <th align="right">Precision</th>
       <th align="right">Recall</th>
+      <th align="left">Code</th>
+      <th align="left">Paper</th>
+      <th align="left">Model</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td colspan="9" align="left" style="background-color:#dbeafe;font-weight:600;border-top:2px solid #3b82f6;">Pixel modeling</td>
+      <td colspan="11" align="left" style="background-color:#dbeafe;font-weight:600;border-top:2px solid #3b82f6;">Pixel modeling</td>
     </tr>
     <!--
     <tr>
@@ -348,8 +421,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">216.0</td>
       <td align="right"></td>
       <td align="right"></td>
+      <td align="left"></td>
       <td align="left">
         <a href="https://proceedings.mlr.press/v202/jabri23a.html"><img src="https://img.shields.io/badge/Paper-ICML%202023-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -365,8 +441,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.42</td>
       <td align="left">
         <a href="https://github.com/openai/guided-diffusion"><img src="https://img.shields.io/badge/Official%20Code-guided--diffusion-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/ADM-diffusers"><img src="https://img.shields.io/badge/Diffusers-ADM--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://proceedings.neurips.cc/paper_files/paper/2021/hash/49ad23d1ec9fa4bd8d77d02681df5cfa-Abstract.html"><img src="https://img.shields.io/badge/Paper-NeurIPS%202021-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -381,8 +460,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/LTH14/JiT"><img src="https://img.shields.io/badge/Official%20Code-JiT-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/JiT-diffusers"><img src="https://img.shields.io/badge/Diffusers-JiT--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2511.13720"><img src="https://img.shields.io/badge/Paper-arXiv%202025-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/JiT-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-JiT--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -397,8 +479,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/MCG-NJU/PixNerd"><img src="https://img.shields.io/badge/Official%20Code-PixNerd-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/PixNerd-diffusers"><img src="https://img.shields.io/badge/Diffusers-PixNerd--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openreview.net/forum?id=BDnOrExHmt"><img src="https://img.shields.io/badge/Paper-ICLR%202026-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/PixNerd-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-PixNerd--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -413,12 +498,16 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.60</td>
       <td align="left">
         <a href="https://github.com/Zehong-Ma/DeCo"><img src="https://img.shields.io/badge/Official%20Code-DeCo-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2511.19365"><img src="https://img.shields.io/badge/Paper-CVPR%202026-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/zehongma/DeCo"><img src="https://img.shields.io/badge/🤗%20Model-DeCo-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
     <tr>
-      <td colspan="9" align="left" style="background-color:#ede9fe;font-weight:600;border-top:2px solid #8b5cf6;">Latent modeling</td>
+      <td colspan="11" align="left" style="background-color:#ede9fe;font-weight:600;border-top:2px solid #8b5cf6;">Latent modeling</td>
     </tr>
     <tr>
       <td align="left">DiT-XL/2-G</td>
@@ -431,7 +520,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.54</td>
       <td align="left">
         <a href="https://github.com/facebookresearch/DiT"><img src="https://img.shields.io/badge/Official%20Code-DiT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openaccess.thecvf.com/content/ICCV2023/html/Peebles_Scalable_Diffusion_Models_with_Transformers_ICCV_2023_paper.html"><img src="https://img.shields.io/badge/Paper-ICCV%202023-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/facebook/DiT-XL-2-512"><img src="https://img.shields.io/badge/🤗%20Model-DiT--XL--2--512-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -446,8 +539,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/NVlabs/edm2"><img src="https://img.shields.io/badge/Official%20Code-edm2-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/EDM2-diffusers"><img src="https://img.shields.io/badge/Diffusers-EDM2--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://openaccess.thecvf.com/content/CVPR2024/html/Karras_Analyzing_and_Improving_the_Training_Dynamics_of_Diffusion_Models_CVPR_2024_paper.html"><img src="https://img.shields.io/badge/Paper-CVPR%202024-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -462,8 +558,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.57</td>
       <td align="left">
         <a href="https://github.com/willisma/SiT"><img src="https://img.shields.io/badge/Official%20Code-SiT-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/SiT-diffusers"><img src="https://img.shields.io/badge/Diffusers-SiT--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://link.springer.com/10.1007/978-3-031-72980-5_2"><img src="https://img.shields.io/badge/Paper-ECCV%202024-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/SiT-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-SiT--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
@@ -478,7 +577,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right">0.53</td>
       <td align="left">
         <a href="https://github.com/whlzy/FiT"><img src="https://img.shields.io/badge/Official%20Code-FiT-181717?logo=github" alt="Official Code"/></a>
+      </td>
+      <td align="left">
         <a href="http://arxiv.org/abs/2410.13925"><img src="https://img.shields.io/badge/Paper-arXiv%202024-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -493,7 +596,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Official%20Code-TBD-181717?logo=github" alt="Official Code (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Paper-TBD-B31B1B" alt="Paper (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -508,7 +615,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Official%20Code-TBD-181717?logo=github" alt="Official Code (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/Paper-TBD-B31B1B" alt="Paper (TBD)"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/collections/BiliSakura/visual-generation-models"><img src="https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface" alt="Hugging Face Model (TBD)"/></a>
       </td>
     </tr>
@@ -523,8 +634,11 @@ A selected collection of CORE visual generative foundation model including code,
       <td align="right"></td>
       <td align="left">
         <a href="https://github.com/WZDTHU/NiT"><img src="https://img.shields.io/badge/Official%20Code-NiT-181717?logo=github" alt="Official Code"/></a>
-        <a href="https://github.com/Bili-Sakura/NiT-diffusers"><img src="https://img.shields.io/badge/Diffusers-NiT--diffusers-181717?logo=github" alt="Diffusers Code"/></a>
+      </td>
+      <td align="left">
         <a href="https://openreview.net/forum?id=QWQB1ReBkJ"><img src="https://img.shields.io/badge/Paper-NeurIPS%202025-B31B1B" alt="Paper"/></a>
+      </td>
+      <td align="left">
         <a href="https://huggingface.co/BiliSakura/NiT-diffusers"><img src="https://img.shields.io/badge/🤗%20Model-NiT--diffusers-yellow&logo=huggingface" alt="Hugging Face Model"/></a>
       </td>
     </tr>
