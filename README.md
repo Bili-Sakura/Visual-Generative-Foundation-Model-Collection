@@ -1,7 +1,8 @@
 # Visual-Generative-Foundation-Model-Collection
 
 
-> [!IMPORTANT] We only hold the core publicly available ones pre-trained on ImageNet.
+> [!IMPORTANT]
+> We only hold the core publicly available ones pre-trained on ImageNet.
 
 A selected collection of CORE visual generative foundation model including code, paper, checkpoint etc. 
 
