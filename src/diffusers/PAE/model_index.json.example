@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "PAEPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_flow_match_pae",
+    "PAEFlowMatchScheduler"
+  ],
+  "vae": [
+    "autoencoder_pae",
+    "PAEAutoencoder"
+  ],
+  "transformer": [
+    "transformer_lightning_dit",
+    "LightningDiT2DModel"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "MDTPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_ddpm_mdt",
+    "scheduling_ddpm_mdt"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_mdt",
+    "MDTTransformer2DModel"
+  ]
+}

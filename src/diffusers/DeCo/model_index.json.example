@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "DeCoPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_deco_flow_match_euler_discrete",
+    "DeCoFlowMatchEulerDiscreteScheduler"
+  ],
+  "vae": [
+    "autoencoder_deco",
+    "DeCoPixelAutoencoder"
+  ],
+  "transformer": [
+    "transformer_deco",
+    "DeCoTransformer2DModel"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "RepaePipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_flow_match_repae",
+    "RepaeFlowMatchScheduler"
+  ],
+  "vae": [
+    "autoencoder_kl_repae",
+    "RepaeAutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_sit",
+    "SiTTransformer2DModel"
+  ]
+}

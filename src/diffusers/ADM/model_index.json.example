@@ -1,0 +1,15 @@
+{
+  "_class_name": [
+    "pipeline",
+    "ADMPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_adm",
+    "ADMScheduler"
+  ],
+  "unet": [
+    "unet_adm",
+    "ADMUNet2DModel"
+  ]
+}

@@ -6,6 +6,29 @@
 > We only hold the core publicly available ones pre-trained on ImageNet.
 
 A selected collection of CORE visual generative foundation model including code, paper, checkpoint etc. 
+## TODO: @src/diffusers Models
+
+- [x] JiT
+- [x] NiT
+- [x] PixNerd
+- [x] SiT
+- [ ] ADM
+- [ ] DDT
+- [ ] DeCo
+- [ ] DiT
+- [ ] EDM2
+- [ ] FD-Loss
+- [ ] FiT
+- [ ] FiTv2
+- [ ] LightningDiT
+- [ ] MDT
+- [ ] MDTv2
+- [ ] PAE
+- [ ] RAE
+- [ ] RAEv2
+- [ ] REPA-E
+
+_Update the checklist as new models are added or completed._
 
 ## Benchmarks
 

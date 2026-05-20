@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "SiTPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_flow_match_sit",
+    "SiTFlowMatchScheduler"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_sit",
+    "SiTTransformer2DModel"
+  ]
+}

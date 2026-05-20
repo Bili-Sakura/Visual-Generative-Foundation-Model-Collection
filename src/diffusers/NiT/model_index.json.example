@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "NiTPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_flow_match_nit",
+    "NiTFlowMatchScheduler"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_nit",
+    "NiTTransformer2DModel"
+  ]
+}

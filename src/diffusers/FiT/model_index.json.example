@@ -1,0 +1,16 @@
+{
+  "_class_name": [
+    "pipeline",
+    "FiTFlowPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_fit",
+    "FiTTransformer2DModel"
+  ],
+  "_note": "FiT stores Transport sample_fn on the pipeline; also ship rectified-flow code under scheduler/."
+}

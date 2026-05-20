@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "DiTPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "diffusers",
+    "DDIMScheduler"
+  ],
+  "transformer": [
+    "diffusers",
+    "DiTTransformer2DModel"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ]
+}
