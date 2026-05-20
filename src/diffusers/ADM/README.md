@@ -12,15 +12,27 @@ pipe = DiffusionPipeline.from_pretrained(
     torch_dtype=torch.float16,
 )
 pipe.to("cuda")
+
+images = pipe(class_labels=207, num_inference_steps=250).images
 ```
 
 ## Hub layout
 
 | Path | Purpose |
 | --- | --- |
-| `pipeline.py` | `ADMPipeline` |
-| `unet/` | modeling_adm.py, unet_adm.py |
-| `scheduler/` | scheduling_adm.py, scheduling_adm_runtime.py |
+| `pipeline.py` | `ADMPipeline`, `ADMPipelineOutput` |
+| `unet/` | `modeling_adm.py`, `unet_adm.py` (`ADMUNet2DModel`) |
+| `scheduler/` | `scheduling_adm.py` (`ADMScheduler`) |
+
+## Diffusers-style API
+
+The pipeline follows the same loop pattern as [`StableDiffusionPipeline`](https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion.py):
+
+1. `scheduler.set_timesteps(num_inference_steps, use_ddim=...)`
+2. `unet(sample, model_timesteps, class_labels=...)`
+3. `scheduler.step(model_output, t, sample)`
+
+Legacy `scheduler.create_runtime().p_sample_loop(...)` remains available on the internal spaced-diffusion object.
 
 ## `model_index.json`
 
