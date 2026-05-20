@@ -1,6 +1,6 @@
 # Visual-Generative-Foundation-Model-Collection
 
-[![🤗 Collection](https://img.shields.io/badge/🤗%20Collection-Visual%20Generation%20Models-yellow?logo=huggingface)](https://huggingface.co/collections/BiliSakura/visual-generation-models)
+[![🤗 Collection](https://img.shields.io/badge/Collection-Visual%20Generation%20Models-yellow?logo=huggingface)](https://huggingface.co/collections/BiliSakura/visual-generation-models)
 
 > [!IMPORTANT]
 > We only hold the core publicly available ones pre-trained on ImageNet.

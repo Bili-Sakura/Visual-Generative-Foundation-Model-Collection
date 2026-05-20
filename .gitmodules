@@ -1,0 +1,71 @@
+[submodule "libs/ADM-diffusers"]
+	path = libs/ADM-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/ADM-diffusers
+
+[submodule "libs/DDT-diffusers"]
+	path = libs/DDT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/DDT-diffusers
+
+[submodule "libs/DeCo-diffusers"]
+	path = libs/DeCo-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/DeCo-diffusers
+
+[submodule "libs/DiT-diffusers"]
+	path = libs/DiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/DiT-diffusers
+
+[submodule "libs/EDM2-diffusers"]
+	path = libs/EDM2-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/EDM2-diffusers
+
+[submodule "libs/FD-Loss-diffusers"]
+	path = libs/FD-Loss-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/FD-Loss-diffusers
+
+[submodule "libs/FiT-diffusers"]
+	path = libs/FiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/FiT-diffusers
+
+[submodule "libs/JiT-diffusers"]
+	path = libs/JiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/JiT-diffusers
+
+[submodule "libs/LightningDiT-diffusers"]
+	path = libs/LightningDiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/LightningDiT-diffusers
+
+[submodule "libs/MDT-diffusers"]
+	path = libs/MDT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/MDT-diffusers
+
+[submodule "libs/NiT-diffusers"]
+	path = libs/NiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/NiT-diffusers
+
+[submodule "libs/PAE-diffusers"]
+	path = libs/PAE-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/PAE-diffusers
+
+[submodule "libs/PixNerd-diffusers"]
+	path = libs/PixNerd-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/PixNerd-diffusers
+
+[submodule "libs/RAE-diffusers"]
+	path = libs/RAE-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/RAE-diffusers
+
+[submodule "libs/RAEv2-diffusers"]
+	path = libs/RAEv2-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/RAEv2-diffusers
+
+[submodule "libs/REPA-E-diffusers"]
+	path = libs/REPA-E-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/REPA-E-diffusers
+
+[submodule "libs/SiT-diffusers"]
+	path = libs/SiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/SiT-diffusers
+
+[submodule "libs/diffusers"]
+	path = libs/diffusers
+	url = https://ghfast.top/https://github.com/huggingface/diffusers
