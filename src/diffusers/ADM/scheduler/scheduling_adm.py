@@ -188,6 +188,11 @@ class _GaussianDiffusion:
         model_output = model(x, ts, **model_kwargs)
         return self.p_mean_variance_from_output(model_output, x, t, clip_denoised=clip_denoised)
 
+    def condition_mean(self, cond_grad: torch.Tensor, p_mean_var: dict, x: torch.Tensor) -> torch.Tensor:
+        """Apply classifier guidance to the reverse-process mean (Sohl-Dickstein et al., 2015)."""
+        del x
+        return p_mean_var["mean"].float() + p_mean_var["variance"] * cond_grad.float()
+
     def p_sample_from_output(
         self,
         model_output: torch.Tensor,
@@ -195,8 +200,11 @@ class _GaussianDiffusion:
         t: torch.Tensor,
         clip_denoised: bool = True,
         generator: Optional[torch.Generator] = None,
+        cond_grad: Optional[torch.Tensor] = None,
     ):
         out = self.p_mean_variance_from_output(model_output, x, t, clip_denoised=clip_denoised)
+        if cond_grad is not None:
+            out["mean"] = self.condition_mean(cond_grad, out, x)
         noise = _randn_like(x, generator=generator)
         nonzero_mask = (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         sample = out["mean"] + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
@@ -233,6 +241,16 @@ class _GaussianDiffusion:
                 yield out
                 img = out["sample"]
 
+    def condition_score(self, cond_grad: torch.Tensor, p_mean_var: dict, x: torch.Tensor, t: torch.Tensor) -> dict:
+        """Apply classifier guidance to the score (Song et al., 2020) for DDIM."""
+        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
+        eps = self._predict_eps_from_xstart(x, t, p_mean_var["pred_xstart"])
+        eps = eps - (1 - alpha_bar).sqrt() * cond_grad
+        out = dict(p_mean_var)
+        out["pred_xstart"] = self._predict_xstart_from_eps(x_t=x, t=t, eps=eps)
+        out["mean"], _, _ = self.q_posterior_mean_variance(x_start=out["pred_xstart"], x_t=x, t=t)
+        return out
+
     def ddim_sample_from_output(
         self,
         model_output: torch.Tensor,
@@ -241,8 +259,11 @@ class _GaussianDiffusion:
         clip_denoised: bool = True,
         eta: float = 0.0,
         generator: Optional[torch.Generator] = None,
+        cond_grad: Optional[torch.Tensor] = None,
     ):
         out = self.p_mean_variance_from_output(model_output, x, t, clip_denoised=clip_denoised)
+        if cond_grad is not None:
+            out = self.condition_score(cond_grad, out, x, t)
         pred_xstart = out["pred_xstart"]
         eps = self._predict_eps_from_xstart(x, t, pred_xstart)
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
@@ -481,6 +502,7 @@ class ADMScheduler(SchedulerMixin, ConfigMixin):
         return_dict: bool = True,
         clip_denoised: bool = True,
         eta: Optional[float] = None,
+        cond_grad: Optional[torch.Tensor] = None,
     ) -> Union[ADMSchedulerOutput, Tuple[torch.Tensor, ...]]:
         """
         Predict the sample at the previous timestep from the model output.
@@ -500,6 +522,8 @@ class ADMScheduler(SchedulerMixin, ConfigMixin):
                 Whether to clamp the predicted `x_0` to `[-1, 1]`.
             eta (`float`, *optional*):
                 DDIM stochasticity parameter. Only used when `use_ddim=True` was passed to `set_timesteps`.
+            cond_grad (`torch.Tensor`, *optional*):
+                Classifier guidance gradient for ADM-G (`classifier_scale * grad log p(y|x_t)`).
 
         Returns:
             [`ADMSchedulerOutput`] or `tuple`:
@@ -526,6 +550,7 @@ class ADMScheduler(SchedulerMixin, ConfigMixin):
                 clip_denoised=clip_denoised,
                 eta=ddim_eta,
                 generator=generator,
+                cond_grad=cond_grad,
             )
         else:
             out = self._diffusion.p_sample_from_output(
@@ -534,6 +559,7 @@ class ADMScheduler(SchedulerMixin, ConfigMixin):
                 timestep,
                 clip_denoised=clip_denoised,
                 generator=generator,
+                cond_grad=cond_grad,
             )
 
         prev_sample = out["sample"]

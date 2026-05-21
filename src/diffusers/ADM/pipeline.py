@@ -36,7 +36,8 @@ EXAMPLE_DOC_STRING = """
         ... )
         >>> pipe.to("cuda")
 
-        >>> images = pipe(class_labels=207, num_inference_steps=250).images
+        >>> # ADM-G (classifier guidance)
+        >>> images = pipe(class_labels=207, classifier_guidance_scale=1.0, num_inference_steps=250).images
         ```
 """
 
@@ -57,29 +58,37 @@ class ADMPipelineOutput(BaseOutput):
 
 class ADMPipeline(DiffusionPipeline):
     r"""
-    Pipeline for class-conditional image generation with ADM (Ablated Diffusion Model).
+    Pipeline for image generation with ADM (Ablated Diffusion Model).
 
-    This pipeline denoises images in pixel space using an ADM UNet and an ADM Gaussian diffusion scheduler. Models are
-    stored as separate Hub subfolders (`unet/`, `scheduler/`) and loaded with
-    [`DiffusionPipeline.from_pretrained`].
+    Supports class-conditional ADM (labels embedded in the UNet) and **ADM-G** (unconditional UNet + noisy
+    classifier guidance). For ADM-G, pass `classifier_guidance_scale > 0` and provide `class_labels`; the
+    optional `classifier` predicts `p(y | x_t)` and steers sampling.
 
     Args:
         unet ([`ADMUNet2DModel`]):
-            A UNet model to denoise the encoded image samples.
+            A UNet model to denoise image samples (typically unconditional for ADM-G).
         scheduler ([`ADMScheduler`]):
-            A scheduler used with the UNet to denoise the image samples.
+            A scheduler used with the UNet to denoise image samples.
+        classifier ([`ADMClassifierModel`], *optional*):
+            Noisy ImageNet classifier for ADM-G guidance.
     """
 
-    model_cpu_offload_seq = "unet"
+    model_cpu_offload_seq = "classifier->unet"
+    _optional_components = ["classifier"]
 
     def __init__(
         self,
         unet,
         scheduler,
+        classifier=None,
     ):
         super().__init__()
-        self.register_modules(unet=unet, scheduler=scheduler)
+        self.register_modules(unet=unet, scheduler=scheduler, classifier=classifier)
         self.image_processor = VaeImageProcessor(vae_scale_factor=1, do_normalize=False)
+
+    @property
+    def do_classifier_guidance(self) -> bool:
+        return self.classifier is not None and getattr(self, "_classifier_guidance_scale", 0.0) > 0
 
     def check_inputs(
         self,
@@ -87,8 +96,14 @@ class ADMPipeline(DiffusionPipeline):
         height: Optional[int],
         width: Optional[int],
     ):
-        if class_labels is not None and self.unet.config.class_cond is False:
-            raise ValueError("This checkpoint is not class-conditional but `class_labels` were passed.")
+        if class_labels is None and self.unet.config.class_cond:
+            raise ValueError("`class_labels` are required for class-conditional ADM checkpoints.")
+
+        if class_labels is not None and self.classifier is None and not self.unet.config.class_cond:
+            raise ValueError(
+                "This checkpoint is unconditional and has no classifier. Load an ADM-G repo with a "
+                "`classifier/` subfolder, or use a class-conditional UNet."
+            )
 
         if height is not None and height % 8 != 0:
             raise ValueError(f"`height` must be divisible by 8 but is {height}.")
@@ -116,6 +131,20 @@ class ADMPipeline(DiffusionPipeline):
                 f"`class_labels` batch ({class_labels.shape[0]}) must match requested batch size ({batch_size})."
             )
         return class_labels
+
+    def _get_classifier_grad(
+        self,
+        sample: torch.Tensor,
+        timestep: torch.Tensor,
+        class_labels: torch.Tensor,
+        classifier_scale: float,
+    ) -> torch.Tensor:
+        return self.classifier.guidance_gradient(
+            sample,
+            timestep,
+            class_labels,
+            classifier_scale=classifier_scale,
+        )
 
     def prepare_latents(
         self,
@@ -172,6 +201,7 @@ class ADMPipeline(DiffusionPipeline):
         use_ddim: bool = False,
         eta: float = 0.0,
         clip_denoised: bool = True,
+        classifier_guidance_scale: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
         output_type: str = "pil",
@@ -182,7 +212,7 @@ class ADMPipeline(DiffusionPipeline):
 
         Args:
             class_labels (`int` or `list[int]` or `torch.Tensor`, *optional*):
-                ImageNet class indices for class-conditional models.
+                ImageNet class indices. Required for class-conditional UNets and for ADM-G classifier guidance.
             batch_size (`int`, *optional*, defaults to 1):
                 Number of images to generate when `class_labels` is not provided.
             height (`int`, *optional*):
@@ -197,6 +227,8 @@ class ADMPipeline(DiffusionPipeline):
                 DDIM stochasticity parameter. Only used when `use_ddim=True`.
             clip_denoised (`bool`, *optional*, defaults to `True`):
                 Clamp predicted `x_0` to `[-1, 1]` inside the scheduler.
+            classifier_guidance_scale (`float`, *optional*, defaults to 0.0):
+                ADM-G guidance strength. Values `> 0` require a loaded `classifier` (OpenAI `classifier_scale`).
             generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
                 RNG for reproducible generation.
             latents (`torch.Tensor`, *optional*):
@@ -219,6 +251,12 @@ class ADMPipeline(DiffusionPipeline):
 
         self.check_inputs(class_labels, height, width)
 
+        if classifier_guidance_scale > 0 and self.classifier is None:
+            raise ValueError("`classifier_guidance_scale > 0` requires a loaded `classifier` (ADM-G checkpoint).")
+        if classifier_guidance_scale > 0 and class_labels is None:
+            raise ValueError("`class_labels` are required when using classifier guidance.")
+
+        self._classifier_guidance_scale = classifier_guidance_scale
         device = self._execution_device
         model_dtype = self.unet.dtype
 
@@ -248,6 +286,8 @@ class ADMPipeline(DiffusionPipeline):
 
         self._num_timesteps = len(self.scheduler.timesteps)
 
+        unet_class_labels = class_labels if self.unet.config.class_cond else None
+
         for t in tqdm(self.scheduler.timesteps, desc="Denoising"):
             timestep = torch.full((batch_size,), t, device=device, dtype=torch.long)
             model_timesteps = self.scheduler.scale_timesteps_for_model(timestep)
@@ -255,9 +295,18 @@ class ADMPipeline(DiffusionPipeline):
             model_output = self.unet(
                 latents,
                 model_timesteps,
-                class_labels=class_labels,
+                class_labels=unet_class_labels,
                 return_dict=True,
             ).sample
+
+            cond_grad = None
+            if self.do_classifier_guidance:
+                cond_grad = self._get_classifier_grad(
+                    latents,
+                    timestep,
+                    class_labels,
+                    classifier_guidance_scale,
+                )
 
             latents = self.scheduler.step(
                 model_output,
@@ -266,6 +315,7 @@ class ADMPipeline(DiffusionPipeline):
                 generator=generator,
                 clip_denoised=clip_denoised,
                 eta=eta,
+                cond_grad=cond_grad,
             ).prev_sample
 
         image = latents

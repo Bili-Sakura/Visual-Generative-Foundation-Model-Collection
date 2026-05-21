@@ -11,5 +11,9 @@
   "unet": [
     "unet_adm",
     "ADMUNet2DModel"
+  ],
+  "classifier": [
+    "classifier_adm",
+    "ADMClassifierModel"
   ]
 }
