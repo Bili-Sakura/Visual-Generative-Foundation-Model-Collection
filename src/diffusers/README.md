@@ -18,8 +18,8 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | MDT | [MDT/](MDT/) |
 | NiT | [NiT/](NiT/) |
 | PAE | [PAE/](PAE/) |
-| PixelFlow | [PixelFlow/](PixelFlow/) |
 | PixNerd | [PixNerd/](PixNerd/) |
+| PixelFlow | [PixelFlow/](PixelFlow/) |
 | RAE | [RAE/](RAE/) |
 | RAEv2 | [RAEv2/](RAEv2/) |
 | REPA-E | [REPA-E/](REPA-E/) |

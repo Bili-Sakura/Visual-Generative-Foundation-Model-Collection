@@ -6,11 +6,15 @@
 > We only hold the core publicly available ones pre-trained on ImageNet.
 
 A selected collection of CORE visual generative foundation model including code, paper, checkpoint etc. 
+
 ## TODO: @src/diffusers Models
 
-- [x] JiT
+> JiT is in progress integrating into diffusers main branch, we will refactor it later on.
+
+- [ ] JiT
 - [x] NiT
 - [x] PixNerd
+- [x] PixelFlow
 - [x] SiT
 - [x] ADM
 - [ ] DDT
@@ -38,7 +42,7 @@ _Update the checklist as new models are added or completed._
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | **Pixel modeling** |  |  |  |  |  |  |  |  |  |  |
 | ADM-G |  |  | 250 | 4.59 |  | 0.82 | 0.52 | [![Official Code](https://img.shields.io/badge/Official%20Code-ADM-181717?logo=github)](https://github.com/openai/guided-diffusion) | [![Paper](https://img.shields.io/badge/Paper-NeurIPS%202021-B31B1B)](https://proceedings.neurips.cc/paper_files/paper/2021/hash/49ad23d1ec9fa4bd8d77d02681df5cfa-Abstract.html) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-ADM--diffusers-yellow&logo=huggingface)](https://huggingface.co/BiliSakura/ADM-diffusers) |
-| PixelFlow | 677M |  |  | 1.98 | 282.1 | 0.81 | 0.60 | [![Official Code](https://img.shields.io/badge/Official%20Code-PixelFlow-181717?logo=github)](https://github.com/ShoufaChen/PixelFlow) | [![Paper](https://img.shields.io/badge/Paper-arXiv%202025-B31B1B)](http://arxiv.org/abs/2504.07963) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-PixelFlow--Class2Image-yellow&logo=huggingface)](https://huggingface.co/ShoufaChen/PixelFlow-Class2Image) |
+| PixelFlow | 677M |  |  | 1.98 | 282.1 | 0.81 | 0.60 | [![Official Code](https://img.shields.io/badge/Official%20Code-PixelFlow-181717?logo=github)](https://github.com/ShoufaChen/PixelFlow) | [![Paper](https://img.shields.io/badge/Paper-arXiv%202025-B31B1B)](http://arxiv.org/abs/2504.07963) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-PixelFlow--diffusers-yellow&logo=huggingface)](https://huggingface.co/BiliSakura/PixelFlow-diffusers) |
 | JiT-H/16 | 953M | 182 | 50 | 1.86 | 303.4 |  |  | [![Official Code](https://img.shields.io/badge/Official%20Code-JiT-181717?logo=github)](https://github.com/LTH14/JiT) | [![Paper](https://img.shields.io/badge/Paper-arXiv%202025-B31B1B)](http://arxiv.org/abs/2511.13720) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-JiT--diffusers-yellow&logo=huggingface)](https://huggingface.co/BiliSakura/JiT-diffusers) |
 | PixNerd-XL/16 | 700M | 134 | 100 | 1.93 | 297 |  |  | [![Official Code](https://img.shields.io/badge/Official%20Code-PixNerd-181717?logo=github)](https://github.com/MCG-NJU/PixNerd) | [![Paper](https://img.shields.io/badge/Paper-ICLR%202026-B31B1B)](https://openreview.net/forum?id=BDnOrExHmt) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-PixNerd--diffusers-yellow&logo=huggingface)](https://huggingface.co/BiliSakura/PixNerd-diffusers) |
 | DeCo-XL/16 | 682M |  | 500 | 1.62 | 301 | 0.80 | 0.62 | [![Official Code](https://img.shields.io/badge/Official%20Code-DeCo-181717?logo=github)](https://github.com/Zehong-Ma/DeCo) | [![Paper](https://img.shields.io/badge/Paper-CVPR%202026-B31B1B)](http://arxiv.org/abs/2511.19365) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-DeCo-yellow&logo=huggingface)](https://huggingface.co/zehongma/DeCo) |
