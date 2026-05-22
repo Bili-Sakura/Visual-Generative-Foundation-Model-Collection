@@ -1,0 +1,4 @@
+diffusers>=0.32.0
+numpy
+safetensors
+torch

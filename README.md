@@ -9,9 +9,7 @@ A selected collection of CORE visual generative foundation model including code,
 
 ## TODO: @src/diffusers Models
 
-> JiT is in progress integrating into diffusers main branch, we will refactor it later on.
-
-- [ ] JiT
+- [x] JiT
 - [x] NiT
 - [x] PixNerd
 - [x] PixelFlow

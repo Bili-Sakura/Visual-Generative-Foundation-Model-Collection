@@ -1,9 +1,3 @@
-"""Hub custom pipeline: JiTPipeline.
-Load with native Hugging Face diffusers and trust_remote_code=True.
-"""
-
-from __future__ import annotations
-
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +12,8 @@ from __future__ import annotations
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import importlib
 import json
 import sys
@@ -29,10 +25,12 @@ import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.utils.torch_utils import randn_tensor
 
+
 RECOMMENDED_NOISE_BY_SIZE = {
     256: 1.0,
     512: 2.0,
 }
+
 
 class JiTPipeline(DiffusionPipeline):
     r"""
@@ -50,6 +48,82 @@ class JiTPipeline(DiffusionPipeline):
     """
 
     model_cpu_offload_seq = "transformer"
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path=None, subfolder=None, **kwargs):
+        """Load a self-contained variant folder locally or from the Hub.
+
+        Examples:
+            JiTPipeline.from_pretrained(".")
+            JiTPipeline.from_pretrained("./JiT-H-32")
+            DiffusionPipeline.from_pretrained("BiliSakura/JiT-diffusers", subfolder="JiT-H-32", trust_remote_code=True)
+        """
+        repo_root = Path(__file__).resolve().parent
+
+        if pretrained_model_name_or_path in (None, "", "."):
+            variant = repo_root
+        elif (
+            isinstance(pretrained_model_name_or_path, str)
+            and "/" in pretrained_model_name_or_path
+            and not Path(pretrained_model_name_or_path).exists()
+        ):
+            from huggingface_hub import snapshot_download
+
+            hub_kwargs = dict(kwargs.pop("hub_kwargs", {}))
+            if subfolder:
+                hub_kwargs.setdefault("allow_patterns", [f"{subfolder}/**", "labels/**"])
+            cache_dir = snapshot_download(pretrained_model_name_or_path, **hub_kwargs)
+            variant = Path(cache_dir) / subfolder if subfolder else Path(cache_dir)
+        else:
+            variant = Path(pretrained_model_name_or_path)
+            if not variant.is_absolute():
+                candidate = (Path.cwd() / variant).resolve()
+                variant = candidate if candidate.exists() else (repo_root / variant).resolve()
+            if subfolder:
+                variant = variant / subfolder
+
+        model_kwargs = dict(kwargs)
+        inserted: List[str] = []
+
+        def _load_component(folder: str, module_name: str, class_name: str):
+            comp_dir = variant / folder
+            module_path = comp_dir / f"{module_name}.py"
+            has_weights = (comp_dir / "config.json").exists() or (comp_dir / "scheduler_config.json").exists()
+            if not module_path.exists() or not has_weights:
+                return None
+
+            comp_path = str(comp_dir)
+            if comp_path not in sys.path:
+                sys.path.insert(0, comp_path)
+                inserted.append(comp_path)
+
+            module = importlib.import_module(module_name)
+            component_cls = getattr(module, class_name)
+            return component_cls.from_pretrained(str(comp_dir), **model_kwargs)
+
+        try:
+            transformer = _load_component("transformer", "jit_transformer_2d", "JiTTransformer2DModel")
+            scheduler = _load_component("scheduler", "scheduling_jit", "JiTScheduler")
+
+            if transformer is None:
+                raise ValueError(f"No loadable transformer found under {variant}")
+
+            variant_path = str(variant)
+            id2label, id2label_cn = cls._load_labels_for_variant(variant_path)
+
+            pipe = cls(
+                transformer=transformer,
+                scheduler=scheduler,
+                id2label=id2label,
+                id2label_cn=id2label_cn,
+            )
+            if variant_path and hasattr(pipe, "register_to_config"):
+                pipe.register_to_config(_name_or_path=variant_path)
+            return pipe
+        finally:
+            for comp_path in inserted:
+                if comp_path in sys.path:
+                    sys.path.remove(comp_path)
 
     def __init__(
         self,

@@ -9,7 +9,7 @@
     "JiTScheduler"
   ],
   "transformer": [
-    "transformer_jit",
+    "jit_transformer_2d",
     "JiTTransformer2DModel"
   ]
 }

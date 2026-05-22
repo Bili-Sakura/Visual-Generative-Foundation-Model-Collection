@@ -4,12 +4,12 @@
     "ADMPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "unet": [
-    "unet_adm",
-    "ADMUNet2DModel"
-  ],
   "scheduler": [
     "scheduling_adm",
     "ADMScheduler"
+  ],
+  "unet": [
+    "unet_adm",
+    "ADMUNet2DModel"
   ]
 }

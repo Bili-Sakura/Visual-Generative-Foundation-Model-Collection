@@ -19,7 +19,7 @@ pipe.to("cuda")
 | Path | Purpose |
 | --- | --- |
 | `pipeline.py` | `JiTPipeline` |
-| `transformer/` | modeling_jit_backbone.py, modeling_jit_utils.py, transformer_jit.py |
+| `transformer/` | jit_transformer_2d.py, jit_weights.py |
 | `scheduler/` | scheduling_jit.py |
 
 ## `model_index.json`
