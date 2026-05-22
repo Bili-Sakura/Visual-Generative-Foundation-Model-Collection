@@ -18,6 +18,7 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | MDT | [MDT/](MDT/) |
 | NiT | [NiT/](NiT/) |
 | PAE | [PAE/](PAE/) |
+| PixelFlow | [PixelFlow/](PixelFlow/) |
 | PixNerd | [PixNerd/](PixNerd/) |
 | RAE | [RAE/](RAE/) |
 | RAEv2 | [RAEv2/](RAEv2/) |

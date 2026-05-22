@@ -1,0 +1,12 @@
+{
+  "_class_name": "PixelFlowPipeline",
+  "_diffusers_version": "0.36.0",
+  "scheduler": [
+    "scheduling_pixelflow",
+    "PixelFlowScheduler"
+  ],
+  "transformer": [
+    "transformer_pixelflow",
+    "PixelFlowTransformer2DModel"
+  ]
+}

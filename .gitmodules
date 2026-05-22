@@ -46,6 +46,10 @@
 	path = libs/PAE-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/PAE-diffusers
 
+[submodule "libs/PixelFlow-diffusers"]
+	path = libs/PixelFlow-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/PixelFlow-diffusers
+
 [submodule "libs/PixNerd-diffusers"]
 	path = libs/PixNerd-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/PixNerd-diffusers
