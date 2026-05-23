@@ -39,7 +39,7 @@ EXAMPLE_DOC_STRING = """
         ... )
         >>> pipe = pipe.to("cuda")
         >>> class_id = pipe.get_label_ids("golden retriever")[0]
-        >>> image = pipe(class_labels=class_id, classifier_guidance_scale=1.0).images[0]
+        >>> image = pipe(class_labels=class_id, guidance_scale=1.0).images[0]
         ```
 """
 
@@ -153,7 +153,14 @@ class ADMPipeline(DiffusionPipeline):
             raise ValueError(f"height and width must be divisible by 8, got ({height}, {width}).")
         if output_type not in {"pil", "np", "pt", "latent"}:
             raise ValueError(f"Unsupported output_type: {output_type}")
-        if class_labels is None and (self.unet.config.class_cond or classifier_guidance_scale > 0):
+        # This checkpoint does not use classifier-free guidance (CFG).
+        # Keep classifier_guidance_scale for compatibility, but treat guidance_scale
+        # as the primary classifier-guidance strength.
+        effective_classifier_guidance_scale = (
+            float(classifier_guidance_scale) if classifier_guidance_scale > 0 else float(guidance_scale)
+        )
+
+        if class_labels is None and (self.unet.config.class_cond or effective_classifier_guidance_scale > 0):
             raise ValueError("class_labels are required for class-conditional sampling and ADM-G guidance.")
 
         if isinstance(class_labels, int):
@@ -168,7 +175,6 @@ class ADMPipeline(DiffusionPipeline):
         device = self._execution_device
         channels = int(getattr(self.unet.config, "in_channels", 3))
         dtype = self.unet.dtype
-        do_cfg = guidance_scale > 1.0 and bool(self.unet.config.class_cond)
 
         # Stage 3: prepare class conditioning
         class_tensor = None
@@ -179,11 +185,7 @@ class ADMPipeline(DiffusionPipeline):
             if class_tensor.shape[0] != batch_size:
                 raise ValueError("class_labels batch must match requested batch_size")
             if self.unet.config.class_cond:
-                if do_cfg:
-                    null_ids = torch.full((batch_size,), int(self.config.null_class_id), dtype=torch.long, device=device)
-                    class_input = torch.cat([class_tensor, null_ids], dim=0)
-                else:
-                    class_input = class_tensor
+                class_input = class_tensor
 
         # Stage 4: prepare timesteps
         scheduler = self.scheduler
@@ -205,29 +207,18 @@ class ADMPipeline(DiffusionPipeline):
 
         # Stage 7: denoising loop
         for timestep in self.progress_bar(scheduler.timesteps):
-            model_input = torch.cat([latents, latents], dim=0) if do_cfg else latents
+            model_input = latents
             model_input = scheduler.scale_model_input(model_input, timestep)
             timestep_input = self._expand_timestep(timestep, model_input.shape[0], model_input.device)
             model_output = self.unet(model_input, timestep_input, class_labels=class_input, return_dict=True).sample
 
-            if do_cfg:
-                eps = model_output[:, :channels] if model_output.shape[1] == 2 * channels else model_output
-                cond_eps, uncond_eps = eps.chunk(2, dim=0)
-                guided_eps = uncond_eps + guidance_scale * (cond_eps - uncond_eps)
-                if model_output.shape[1] == 2 * channels:
-                    _, variance_pred = model_output.chunk(2, dim=1)
-                    variance_cond, _ = variance_pred.chunk(2, dim=0)
-                    model_output = torch.cat([guided_eps, variance_cond], dim=1)
-                else:
-                    model_output = guided_eps
-
             cond_grad = None
-            if classifier_guidance_scale > 0:
+            if effective_classifier_guidance_scale > 0:
                 if self.classifier is None or class_tensor is None:
-                    raise ValueError("classifier_guidance_scale requires both classifier and class_labels.")
+                    raise ValueError("guidance_scale requires both classifier and class_labels.")
                 grad_t = self._expand_timestep(timestep, batch_size, latents.device)
                 cond_grad = self.classifier.guidance_gradient(
-                    latents, grad_t, class_tensor, classifier_scale=classifier_guidance_scale
+                    latents, grad_t, class_tensor, classifier_scale=effective_classifier_guidance_scale
                 )
 
             step_model_output = model_output
@@ -246,7 +237,7 @@ class ADMPipeline(DiffusionPipeline):
                     latents = latents + variance * cond_grad
                 else:
                     raise ValueError(
-                        "classifier_guidance_scale is not supported for the current scheduler. "
+                        "guidance_scale is not supported for the current scheduler. "
                         "Use a DDPM/DDIM-compatible scheduler or disable classifier guidance."
                     )
 
