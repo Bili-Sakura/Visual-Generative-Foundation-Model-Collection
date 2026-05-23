@@ -1,4 +1,6 @@
-# DiT is implemented in upstream Hugging Face diffusers (no custom Hub code required).
-from diffusers import DiTPipeline
+try:
+    from .pipeline import DiTPipeline
+except ImportError:
+    from pipeline import DiTPipeline
 
 __all__ = ["DiTPipeline"]
