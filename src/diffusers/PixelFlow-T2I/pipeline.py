@@ -19,7 +19,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -31,7 +31,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineO
 from diffusers.utils.torch_utils import randn_tensor
 
 
-DEFAULT_NATIVE_RESOLUTION = 256
+DEFAULT_NATIVE_RESOLUTION = 1024
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -40,11 +40,11 @@ EXAMPLE_DOC_STRING = """
         >>> import sys
         >>> import torch
 
-        >>> model_dir = Path("./PixelFlow-256").resolve()
+        >>> model_dir = Path("./PixelFlow-T2I").resolve()
         >>> sys.path.insert(0, str(model_dir))
-        >>> from pipeline import PixelFlowPipeline
+        >>> from pipeline import PixelFlowT2IPipeline
 
-        >>> pipe = PixelFlowPipeline.from_pretrained(
+        >>> pipe = PixelFlowT2IPipeline.from_pretrained(
         ...     str(model_dir),
         ...     local_files_only=True,
         ...     torch_dtype=torch.bfloat16,
@@ -55,39 +55,49 @@ EXAMPLE_DOC_STRING = """
 
 
 
-class PixelFlowPipeline(DiffusionPipeline):
+class PixelFlowT2IPipeline(DiffusionPipeline):
     r"""
-    Pipeline for class-conditional PixelFlow pixel-space cascade generation.
+    Pipeline for text-to-image PixelFlow pixel-space cascade generation.
 
     Parameters:
         transformer ([`PixelFlowTransformer2DModel`]):
-            Class-conditional PixelFlow transformer operating in pixel space.
+            Text-conditioned PixelFlow transformer operating in pixel space.
         scheduler ([`PixelFlowScheduler`]):
             Multi-stage flow scheduler used by PixelFlow.
-        id2label (`dict[int, str]`, *optional*):
-            ImageNet class id to English label mapping. Values may contain comma-separated synonyms.
+        text_encoder ([`T5EncoderModel`], *optional*):
+            Text encoder used to embed prompts.
+        tokenizer ([`T5Tokenizer`], *optional*):
+            Tokenizer paired with the text encoder.
     """
 
-    model_cpu_offload_seq = "transformer"
+    model_cpu_offload_seq = "text_encoder->transformer"
+    _optional_components = ["text_encoder", "tokenizer"]
 
     def __init__(
         self,
         transformer: Any,
         scheduler: Any,
-        id2label: Optional[Dict[Union[int, str], str]] = None,
+        text_encoder=None,
+        tokenizer=None,
+        max_token_length: int = 512,
     ):
         super().__init__()
-        self.register_modules(transformer=transformer, scheduler=scheduler)
+        self.register_modules(
+            transformer=transformer,
+            scheduler=scheduler,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+        )
         self.image_processor = VaeImageProcessor(vae_scale_factor=1, do_normalize=False)
-        self._id2label = self._normalize_id2label(id2label)
-        self.labels = self._build_label2id(self._id2label)
-        self._labels_loaded_from_model_index = bool(self._id2label)
+        self.max_token_length = max_token_length
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path=None, subfolder=None, **kwargs):
         """Load a self-contained variant folder locally or from the Hub."""
         import importlib
         import sys
+
+        from transformers import T5EncoderModel, T5Tokenizer
 
         repo_root = Path(__file__).resolve().parent
 
@@ -113,7 +123,6 @@ class PixelFlowPipeline(DiffusionPipeline):
             if subfolder:
                 variant = variant / subfolder
 
-        id2label_override = kwargs.pop("id2label", None)
         model_kwargs = dict(kwargs)
         scheduler_kwargs = model_kwargs.pop("scheduler_kwargs", {})
         inserted = []
@@ -144,8 +153,20 @@ class PixelFlowPipeline(DiffusionPipeline):
             except Exception:
                 scheduler = scheduler_cls(**scheduler_kwargs)
 
-            id2label = id2label_override or cls._read_id2label_from_model_index(str(variant))
-            pipe = cls(transformer=transformer, scheduler=scheduler, id2label=id2label)
+            text_encoder = None
+            tokenizer = None
+            text_encoder_dir = variant / "text_encoder"
+            tokenizer_dir = variant / "tokenizer"
+            if text_encoder_dir.exists() and (text_encoder_dir / "config.json").exists():
+                text_encoder = T5EncoderModel.from_pretrained(str(text_encoder_dir), **model_kwargs)
+                tokenizer = T5Tokenizer.from_pretrained(str(tokenizer_dir if tokenizer_dir.exists() else text_encoder_dir))
+
+            if text_encoder is None or tokenizer is None:
+                text_encoder_name = cls._read_text_encoder_name(variant)
+                text_encoder = T5EncoderModel.from_pretrained(text_encoder_name, **model_kwargs)
+                tokenizer = T5Tokenizer.from_pretrained(text_encoder_name)
+
+            pipe = cls(transformer=transformer, scheduler=scheduler, text_encoder=text_encoder, tokenizer=tokenizer)
             if hasattr(pipe, "register_to_config"):
                 pipe.register_to_config(_name_or_path=str(variant))
             return pipe
@@ -158,6 +179,8 @@ class PixelFlowPipeline(DiffusionPipeline):
         model_kwargs = dict(kwargs)
         transformer_subfolder = model_kwargs.pop("transformer_subfolder", None)
         scheduler_subfolder = model_kwargs.pop("scheduler_subfolder", None)
+        text_encoder_subfolder = model_kwargs.pop("text_encoder_subfolder", None)
+        tokenizer_subfolder = model_kwargs.pop("tokenizer_subfolder", None)
         scheduler_kwargs = model_kwargs.pop("scheduler_kwargs", {})
         base_path = Path(pretrained_model_name_or_path)
 
@@ -165,6 +188,10 @@ class PixelFlowPipeline(DiffusionPipeline):
             transformer_subfolder = "transformer"
         if scheduler_subfolder is None and (base_path / "scheduler").exists():
             scheduler_subfolder = "scheduler"
+        if text_encoder_subfolder is None and (base_path / "text_encoder").exists():
+            text_encoder_subfolder = "text_encoder"
+        if tokenizer_subfolder is None and (base_path / "tokenizer").exists():
+            tokenizer_subfolder = "tokenizer"
 
         try:
             return super().from_pretrained(pretrained_model_name_or_path, **kwargs)
@@ -184,103 +211,59 @@ class PixelFlowPipeline(DiffusionPipeline):
             except Exception:
                 scheduler = PixelFlowScheduler(**scheduler_kwargs)
 
-            id2label = cls._read_id2label_from_model_index(str(base_path))
-            pipe = cls(transformer=transformer, scheduler=scheduler, id2label=id2label)
+            text_encoder = None
+            tokenizer = None
+            if text_encoder_subfolder is not None and (base_path / text_encoder_subfolder / "config.json").exists():
+                from transformers import T5EncoderModel, T5Tokenizer
+
+                text_encoder = T5EncoderModel.from_pretrained(
+                    str(base_path / text_encoder_subfolder),
+                    **model_kwargs,
+                )
+                tokenizer = T5Tokenizer.from_pretrained(str(base_path / tokenizer_subfolder))
+
+            if text_encoder is None and tokenizer is None:
+                text_encoder_name = cls._read_text_encoder_name(base_path)
+                from transformers import T5EncoderModel, T5Tokenizer
+
+                text_encoder = T5EncoderModel.from_pretrained(text_encoder_name, **model_kwargs)
+                tokenizer = T5Tokenizer.from_pretrained(text_encoder_name)
+
+            pipe = cls(
+                transformer=transformer,
+                scheduler=scheduler,
+                text_encoder=text_encoder,
+                tokenizer=tokenizer,
+            )
             if hasattr(pipe, "register_to_config"):
                 pipe.register_to_config(_name_or_path=str(base_path))
             return pipe
 
-    def _ensure_labels_loaded(self) -> None:
-        if self._labels_loaded_from_model_index:
-            return
-        loaded = self._read_id2label_from_model_index(getattr(self.config, "_name_or_path", None))
-        if loaded:
-            self._id2label = loaded
-            self.labels = self._build_label2id(self._id2label)
-        self._labels_loaded_from_model_index = True
-
     @staticmethod
-    def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
-        if not id2label:
-            return {}
-        return {int(key): value for key, value in id2label.items()}
-
-    @staticmethod
-    def _read_id2label_from_model_index(variant_path: Optional[str]) -> Dict[int, str]:
-        if not variant_path:
-            return {}
-        model_index_path = Path(variant_path).resolve() / "model_index.json"
-        if not model_index_path.exists():
-            return {}
-        raw = json.loads(model_index_path.read_text(encoding="utf-8"))
-        id2label = raw.get("id2label")
-        if not isinstance(id2label, dict):
-            return {}
-        return {int(key): value for key, value in id2label.items()}
-
-    @staticmethod
-    def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
-        label2id: Dict[str, int] = {}
-        for class_id, value in id2label.items():
-            for synonym in value.split(","):
-                synonym = synonym.strip()
-                if synonym:
-                    label2id[synonym] = int(class_id)
-        return dict(sorted(label2id.items()))
-
-    @property
-    def id2label(self) -> Dict[int, str]:
-        r"""ImageNet class id to English label string (comma-separated synonyms)."""
-        self._ensure_labels_loaded()
-        return self._id2label
-
-    def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
-        r"""
-        Map ImageNet label strings to class ids.
-
-        Args:
-            label (`str` or `list[str]`):
-                One or more English label strings. Each string must match a synonym in `id2label`.
-        """
-        self._ensure_labels_loaded()
-        label2id = self.labels
-        if not label2id:
-            raise ValueError("No English labels loaded. Ensure `id2label` exists in model_index.json.")
-
-        if isinstance(label, str):
-            label = [label]
-
-        missing = [item for item in label if item not in label2id]
-        if missing:
-            preview = ", ".join(list(label2id.keys())[:8])
-            raise ValueError(f"Unknown English label(s): {missing}. Example valid labels: {preview}, ...")
-        return [label2id[item] for item in label]
-
-    def _normalize_class_labels(
-        self,
-        class_labels: Union[int, str, List[Union[int, str]], torch.LongTensor],
-    ) -> torch.LongTensor:
-        if torch.is_tensor(class_labels):
-            return class_labels.to(device=self._execution_device, dtype=torch.long).reshape(-1)
-
-        if isinstance(class_labels, int):
-            class_label_ids = [class_labels]
-        elif isinstance(class_labels, str):
-            class_label_ids = self.get_label_ids(class_labels)
-        elif class_labels and isinstance(class_labels[0], str):
-            class_label_ids = self.get_label_ids(class_labels)
-        else:
-            class_label_ids = list(class_labels)
-
-        return torch.tensor(class_label_ids, device=self._execution_device, dtype=torch.long).reshape(-1)
+    def _read_text_encoder_name(variant_path: Path) -> str:
+        metadata_path = variant_path / "conversion_metadata.json"
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("text_encoder"):
+                return metadata["text_encoder"]
+        return "google/flan-t5-xl"
 
     def check_inputs(
         self,
+        prompt: Union[str, List[str]],
         height: int,
         width: int,
         num_inference_steps: Union[int, List[int]],
         output_type: str,
+        negative_prompt: Optional[Union[str, List[str]]],
     ) -> None:
+        if not isinstance(prompt, str) and not (isinstance(prompt, list) and all(isinstance(p, str) for p in prompt)):
+            raise TypeError("`prompt` must be a string or list of strings.")
+
+        if negative_prompt is not None and not isinstance(negative_prompt, str):
+            if not (isinstance(negative_prompt, list) and all(isinstance(p, str) for p in negative_prompt)):
+                raise TypeError("`negative_prompt` must be a string or list of strings.")
+
         if output_type not in {"pil", "np", "pt", "latent"}:
             raise ValueError("output_type must be one of: 'pil', 'np', 'pt', 'latent'.")
 
@@ -375,20 +358,6 @@ class PixelFlowPipeline(DiffusionPipeline):
         )
         return torch.stack(pos_embed, -1)
 
-    def _stage_guidance_scale(self, stage_idx: int, guidance_scale: float) -> float:
-        scale_dict = {0: 0, 1: 1 / 6, 2: 2 / 3, 3: 1}
-        return (guidance_scale - 1) * scale_dict[stage_idx] + 1
-
-    def _encode_class_condition(
-        self,
-        class_labels_tensor: torch.LongTensor,
-        guidance_scale: float,
-    ) -> torch.LongTensor:
-        null_labels = torch.full_like(class_labels_tensor, self.transformer.config.num_classes)
-        if guidance_scale > 0:
-            return torch.cat([null_labels, class_labels_tensor], dim=0)
-        return class_labels_tensor
-
     def decode_latents(self, latents: torch.Tensor, output_type: str = "pil"):
         image = (latents / 2 + 0.5).clamp(0, 1)
         if output_type == "latent":
@@ -400,24 +369,124 @@ class PixelFlowPipeline(DiffusionPipeline):
         raise ValueError(f"output_type must be one of: 'pil', 'np', 'pt', 'latent'. Got {output_type}.")
 
     @torch.inference_mode()
+    def encode_prompt(
+        self,
+        prompt: Union[str, List[str]],
+        device: torch.device,
+        num_images_per_prompt: int = 1,
+        do_classifier_free_guidance: bool = True,
+        negative_prompt: Union[str, List[str]] = "",
+        max_length: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        r"""
+        Encode text prompts into hidden states for the PixelFlow transformer.
+
+        Args:
+            prompt (`str` or `list[str]`):
+                Prompt(s) to encode.
+            device (`torch.device`):
+                Target device for encoded tensors.
+            num_images_per_prompt (`int`, defaults to `1`):
+                Number of images to generate per prompt.
+            do_classifier_free_guidance (`bool`, defaults to `True`):
+                Whether to concatenate unconditional prompt embeddings for CFG.
+            negative_prompt (`str` or `list[str]`, defaults to `""`):
+                Negative prompt(s) used for classifier-free guidance.
+            max_length (`int`, *optional*):
+                Maximum token length. Defaults to `self.max_token_length`.
+        """
+        if self.text_encoder is None or self.tokenizer is None:
+            raise ValueError("Text-to-image generation requires `text_encoder` and `tokenizer`.")
+
+        if isinstance(prompt, str):
+            prompt = [prompt]
+        batch_size = len(prompt)
+        max_length = max_length or self.max_token_length
+
+        text_inputs = self.tokenizer(
+            prompt,
+            padding="max_length",
+            max_length=max_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        text_input_ids = text_inputs.input_ids.to(device)
+        prompt_attention_mask = text_inputs.attention_mask.to(device)
+        prompt_embeds = self.text_encoder(
+            text_input_ids,
+            attention_mask=prompt_attention_mask,
+        )[0]
+
+        dtype = self.text_encoder.dtype
+        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+        bs_embed, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+        prompt_attention_mask = prompt_attention_mask.view(bs_embed, -1).repeat(num_images_per_prompt, 1)
+
+        if do_classifier_free_guidance:
+            if isinstance(negative_prompt, str):
+                uncond_tokens = [negative_prompt] * batch_size
+            elif isinstance(negative_prompt, list):
+                if len(negative_prompt) != batch_size:
+                    raise ValueError(
+                        f"Negative prompt list length ({len(negative_prompt)}) must match prompt batch ({batch_size})."
+                    )
+                uncond_tokens = negative_prompt
+            else:
+                raise ValueError("Negative prompt must be a string or list of strings.")
+
+            uncond_inputs = self.tokenizer(
+                uncond_tokens,
+                padding="max_length",
+                max_length=prompt_embeds.shape[1],
+                truncation=True,
+                return_attention_mask=True,
+                add_special_tokens=True,
+                return_tensors="pt",
+            )
+            negative_input_ids = uncond_inputs.input_ids.to(device)
+            negative_prompt_attention_mask = uncond_inputs.attention_mask.to(device)
+            negative_prompt_embeds = self.text_encoder(
+                negative_input_ids,
+                attention_mask=negative_prompt_attention_mask,
+            )[0]
+
+            seq_len_neg = negative_prompt_embeds.shape[1]
+            negative_prompt_embeds = negative_prompt_embeds.to(dtype=dtype, device=device)
+            negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
+            negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len_neg, -1)
+            negative_prompt_attention_mask = negative_prompt_attention_mask.view(bs_embed, -1).repeat(
+                num_images_per_prompt, 1
+            )
+
+            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+            prompt_attention_mask = torch.cat([negative_prompt_attention_mask, prompt_attention_mask], dim=0)
+
+        return prompt_embeds, prompt_attention_mask
+
+    @torch.inference_mode()
     def __call__(
         self,
-        class_labels: Union[int, str, List[Union[int, str]], torch.LongTensor],
+        prompt: Union[str, List[str]],
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: Union[int, List[int]] = 10,
         guidance_scale: float = 4.0,
         shift: float = 1.0,
+        negative_prompt: Union[str, List[str]] = "",
+        num_images_per_prompt: int = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         output_type: str = "pil",
         return_dict: bool = True,
     ) -> Union[ImagePipelineOutput, Tuple]:
         r"""
-        Generate class-conditional images with PixelFlow.
+        Generate text-to-image samples with PixelFlow.
 
         Args:
-            class_labels (`int`, `str`, `list[int]`, `list[str]`, or `torch.LongTensor`):
-                ImageNet class indices or human-readable English label strings.
+            prompt (`str` or `list[str]`):
+                Text prompt(s) describing the desired image.
             height (`int`, *optional*):
                 Output image height in pixels. Defaults to the transformer's native resolution.
             width (`int`, *optional*):
@@ -425,9 +494,13 @@ class PixelFlowPipeline(DiffusionPipeline):
             num_inference_steps (`int` or `list[int]`, defaults to `10`):
                 Number of denoising steps per cascade stage.
             guidance_scale (`float`, defaults to `4.0`):
-                Classifier-free guidance scale. Guidance is stage-weighted for PixelFlow cascades.
+                Classifier-free guidance scale.
             shift (`float`, defaults to `1.0`):
                 Noise shift applied by the scheduler when building stage timesteps.
+            negative_prompt (`str` or `list[str]`, defaults to `""`):
+                Negative prompt(s) for classifier-free guidance.
+            num_images_per_prompt (`int`, defaults to `1`):
+                Number of images to generate for each prompt.
             generator (`torch.Generator`, *optional*):
                 RNG for reproducibility.
             output_type (`str`, defaults to `"pil"`):
@@ -435,19 +508,36 @@ class PixelFlowPipeline(DiffusionPipeline):
             return_dict (`bool`, defaults to `True`):
                 Return [`ImagePipelineOutput`] if True.
         """
+        if isinstance(prompt, str):
+            prompt_list = [prompt]
+        else:
+            prompt_list = prompt
+
         default_size = int(getattr(self.transformer.config, "sample_size", DEFAULT_NATIVE_RESOLUTION))
         height = int(height or default_size)
         width = int(width or default_size)
-        self.check_inputs(height, width, num_inference_steps, output_type)
+        self.check_inputs(prompt_list, height, width, num_inference_steps, output_type, negative_prompt)
 
         device = self._execution_device
-        do_classifier_free_guidance = guidance_scale > 0
+        do_classifier_free_guidance = guidance_scale > 1.0
         stage_steps = self._normalize_stage_steps(num_inference_steps)
-        class_labels_tensor = self._normalize_class_labels(class_labels)
-        batch_size = class_labels_tensor.numel()
-        conditioning = self._encode_class_condition(class_labels_tensor, guidance_scale)
+        batch_size = len(prompt_list)
 
-        latents, height, width = self.prepare_latents(batch_size, height, width, device, generator)
+        prompt_embeds, prompt_attention_mask = self.encode_prompt(
+            prompt_list,
+            device,
+            num_images_per_prompt=num_images_per_prompt,
+            do_classifier_free_guidance=do_classifier_free_guidance,
+            negative_prompt=negative_prompt,
+        )
+
+        latents, height, width = self.prepare_latents(
+            batch_size * num_images_per_prompt,
+            height,
+            width,
+            device,
+            generator,
+        )
         size_tensor = torch.tensor([latents.shape[-1] // self.transformer.patch_size], dtype=torch.int32, device=device)
 
         autocast_enabled = device.type == "cuda"
@@ -470,16 +560,16 @@ class PixelFlowPipeline(DiffusionPipeline):
                 with torch.autocast(device.type, enabled=autocast_enabled, dtype=autocast_dtype):
                     noise_pred = self.transformer(
                         latent_model_input,
+                        encoder_hidden_states=prompt_embeds,
+                        encoder_attention_mask=prompt_attention_mask,
                         timestep=timestep_batch,
-                        class_labels=conditioning,
                         latent_size=size_tensor,
                         pos_embed=rope_pos,
                     ).sample
 
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    stage_scale = self._stage_guidance_scale(stage_idx, guidance_scale)
-                    noise_pred = noise_pred_uncond + stage_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 latents = self.scheduler.step(model_output=noise_pred, sample=latents).prev_sample
 

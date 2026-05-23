@@ -11,6 +11,7 @@ model_dir = Path("BiliSakura/JiT-diffusers")
 pipe = DiffusionPipeline.from_pretrained(
     str(model_dir),
     custom_pipeline=str(model_dir / "pipeline.py"),
+    trust_remote_code=True,
     torch_dtype=torch.float16,
 )
 pipe.to("cuda")

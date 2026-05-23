@@ -63,6 +63,7 @@ EXAMPLE_DOC_STRING = """
         ...     str(model_dir),
         ...     local_files_only=True,
         ...     custom_pipeline=str(model_dir / "pipeline.py"),
+        ...     trust_remote_code=True,
         ...     torch_dtype=dtype,
         ... )
         >>> pipe = pipe.to("cuda")

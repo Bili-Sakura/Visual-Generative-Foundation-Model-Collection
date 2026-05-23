@@ -3,17 +3,17 @@
     "pipeline",
     "NiTPipeline"
   ],
-  "_diffusers_version": "0.31.0",
+  "_diffusers_version": "0.36.0",
   "scheduler": [
-    "scheduling_flow_match_nit",
-    "NiTFlowMatchScheduler"
+    "diffusers",
+    "FlowMatchEulerDiscreteScheduler"
+  ],
+  "transformer": [
+    "nit_transformer_2d",
+    "NiTTransformer2DModel"
   ],
   "vae": [
     "diffusers",
-    "AutoencoderKL"
-  ],
-  "transformer": [
-    "transformer_nit",
-    "NiTTransformer2DModel"
+    "AutoencoderDC"
   ]
 }

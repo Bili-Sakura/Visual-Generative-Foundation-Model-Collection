@@ -1,0 +1,7 @@
+{
+  "_class_name": "PixelFlowScheduler",
+  "_diffusers_version": "0.36.0",
+  "num_train_timesteps": 1000,
+  "num_stages": 4,
+  "gamma": -0.3333333333333333
+}
