@@ -37,7 +37,10 @@ def avg_pool_nd(dims: int, *args, **kwargs):
 
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
-        return super().forward(x.float()).type(x.dtype)
+        weight = self.weight.float() if self.weight is not None else None
+        bias = self.bias.float() if self.bias is not None else None
+        y = F.group_norm(x.float(), self.num_groups, weight, bias, self.eps)
+        return y.to(dtype=x.dtype)
 
 
 def normalization(channels: int):
@@ -286,6 +289,212 @@ class AttentionBlock(nn.Module):
         return (x + h).reshape(b, c, *spatial)
 
 
+class AttentionPool2d(nn.Module):
+    """CLIP-style attention pooling used by ADM noisy classifiers."""
+
+    def __init__(self, spacial_dim: int, embed_dim: int, num_heads_channels: int, output_dim: int = None):
+        super().__init__()
+        self.positional_embedding = nn.Parameter(torch.randn(embed_dim, spacial_dim**2 + 1) / embed_dim**0.5)
+        self.qkv_proj = conv_nd(1, embed_dim, 3 * embed_dim, 1)
+        self.c_proj = conv_nd(1, embed_dim, output_dim or embed_dim, 1)
+        self.num_heads = embed_dim // num_heads_channels
+        self.attention = QKVAttention(self.num_heads)
+
+    def forward(self, x):
+        b, c, *_spatial = x.shape
+        x = x.reshape(b, c, -1)
+        x = torch.cat([x.mean(dim=-1, keepdim=True), x], dim=-1)
+        x = x + self.positional_embedding[None, :, :].to(x.dtype)
+        x = self.qkv_proj(x)
+        x = self.attention(x)
+        x = self.c_proj(x)
+        return x[:, :, 0]
+
+
+class EncoderUNetModel(nn.Module):
+    """Noisy image classifier backbone for ADM-G (classifier guidance)."""
+
+    def __init__(
+        self,
+        image_size,
+        in_channels,
+        model_channels,
+        out_channels,
+        num_res_blocks,
+        attention_resolutions,
+        dropout=0,
+        channel_mult=(1, 2, 4, 8),
+        conv_resample=True,
+        dims=2,
+        use_checkpoint=False,
+        use_fp16=False,
+        num_heads=1,
+        num_head_channels=-1,
+        use_scale_shift_norm=False,
+        resblock_updown=False,
+        use_new_attention_order=False,
+        pool="adaptive",
+    ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.model_channels = model_channels
+        self.out_channels = out_channels
+        self.num_res_blocks = num_res_blocks
+        self.dropout = dropout
+        self.channel_mult = channel_mult
+        self.conv_resample = conv_resample
+        self.use_checkpoint = use_checkpoint
+        self.dtype = torch.float16 if use_fp16 else torch.float32
+        self.num_heads = num_heads
+        self.num_head_channels = num_head_channels
+
+        time_embed_dim = model_channels * 4
+        self.time_embed = nn.Sequential(
+            linear(model_channels, time_embed_dim),
+            nn.SiLU(),
+            linear(time_embed_dim, time_embed_dim),
+        )
+
+        ch = int(channel_mult[0] * model_channels)
+        self.input_blocks = nn.ModuleList([TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))])
+        self._feature_size = ch
+        input_block_chans = [ch]
+        ds = 1
+        for level, mult in enumerate(channel_mult):
+            for _ in range(num_res_blocks):
+                layers = [
+                    ResBlock(
+                        ch,
+                        time_embed_dim,
+                        dropout,
+                        out_channels=int(mult * model_channels),
+                        dims=dims,
+                        use_checkpoint=use_checkpoint,
+                        use_scale_shift_norm=use_scale_shift_norm,
+                    )
+                ]
+                ch = int(mult * model_channels)
+                if ds in attention_resolutions:
+                    layers.append(
+                        AttentionBlock(
+                            ch,
+                            use_checkpoint=use_checkpoint,
+                            num_heads=num_heads,
+                            num_head_channels=num_head_channels,
+                            use_new_attention_order=use_new_attention_order,
+                        )
+                    )
+                self.input_blocks.append(TimestepEmbedSequential(*layers))
+                self._feature_size += ch
+                input_block_chans.append(ch)
+            if level != len(channel_mult) - 1:
+                out_ch = ch
+                self.input_blocks.append(
+                    TimestepEmbedSequential(
+                        ResBlock(
+                            ch,
+                            time_embed_dim,
+                            dropout,
+                            out_channels=out_ch,
+                            dims=dims,
+                            use_checkpoint=use_checkpoint,
+                            use_scale_shift_norm=use_scale_shift_norm,
+                            down=True,
+                        )
+                        if resblock_updown
+                        else Downsample(ch, conv_resample, dims=dims, out_channels=out_ch)
+                    )
+                )
+                ch = out_ch
+                input_block_chans.append(ch)
+                ds *= 2
+                self._feature_size += ch
+
+        self.middle_block = TimestepEmbedSequential(
+            ResBlock(
+                ch,
+                time_embed_dim,
+                dropout,
+                dims=dims,
+                use_checkpoint=use_checkpoint,
+                use_scale_shift_norm=use_scale_shift_norm,
+            ),
+            AttentionBlock(
+                ch,
+                use_checkpoint=use_checkpoint,
+                num_heads=num_heads,
+                num_head_channels=num_head_channels,
+                use_new_attention_order=use_new_attention_order,
+            ),
+            ResBlock(
+                ch,
+                time_embed_dim,
+                dropout,
+                dims=dims,
+                use_checkpoint=use_checkpoint,
+                use_scale_shift_norm=use_scale_shift_norm,
+            ),
+        )
+        self._feature_size += ch
+        self.pool = pool
+        if pool == "adaptive":
+            self.out = nn.Sequential(
+                normalization(ch),
+                nn.SiLU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+                zero_module(conv_nd(dims, ch, out_channels, 1)),
+                nn.Flatten(),
+            )
+        elif pool == "attention":
+            assert num_head_channels != -1
+            self.out = nn.Sequential(
+                normalization(ch),
+                nn.SiLU(),
+                AttentionPool2d((image_size // ds), ch, num_head_channels, out_channels),
+            )
+        elif pool == "spatial":
+            self.out = nn.Sequential(
+                nn.Linear(self._feature_size, 2048),
+                nn.ReLU(),
+                nn.Linear(2048, out_channels),
+            )
+        elif pool == "spatial_v2":
+            self.out = nn.Sequential(
+                nn.Linear(self._feature_size, 2048),
+                normalization(2048),
+                nn.SiLU(),
+                nn.Linear(2048, out_channels),
+            )
+        else:
+            raise NotImplementedError(f"Unexpected {pool} pooling")
+
+    def convert_to_fp16(self):
+        self.input_blocks.apply(convert_module_to_f16)
+        self.middle_block.apply(convert_module_to_f16)
+
+    def convert_to_fp32(self):
+        self.input_blocks.apply(convert_module_to_f32)
+        self.middle_block.apply(convert_module_to_f32)
+
+    def forward(self, x, timesteps):
+        emb = timestep_embedding(timesteps, self.model_channels).to(dtype=self.time_embed[0].weight.dtype)
+        emb = self.time_embed(emb)
+        results = []
+        h = x.to(dtype=self.time_embed[0].weight.dtype)
+        for module in self.input_blocks:
+            h = module(h, emb)
+            if self.pool.startswith("spatial"):
+                results.append(h.to(dtype=self.time_embed[0].weight.dtype).mean(dim=(2, 3)))
+        h = self.middle_block(h, emb)
+        if self.pool.startswith("spatial"):
+            results.append(h.to(dtype=self.time_embed[0].weight.dtype).mean(dim=(2, 3)))
+            h = torch.cat(results, dim=-1)
+            return self.out(h)
+        h = h.to(dtype=self.time_embed[0].weight.dtype)
+        return self.out(h)
+
+
 class UNetModel(nn.Module):
     def __init__(
         self,
@@ -468,12 +677,13 @@ class UNetModel(nn.Module):
     def forward(self, x, timesteps, y: Optional[torch.Tensor] = None):
         assert (y is not None) == (self.num_classes is not None)
         hs = []
-        emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+        emb = timestep_embedding(timesteps, self.model_channels).to(dtype=self.time_embed[0].weight.dtype)
+        emb = self.time_embed(emb)
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
 
-        h = x.type(self.dtype)
+        h = x.to(dtype=self.time_embed[0].weight.dtype)
         for module in self.input_blocks:
             h = module(h, emb)
             hs.append(h)
@@ -481,7 +691,7 @@ class UNetModel(nn.Module):
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
             h = module(h, emb)
-        h = h.type(x.dtype)
+        h = h.to(dtype=self.time_embed[0].weight.dtype)
         return self.out(h)
 
 
@@ -535,4 +745,33 @@ def create_adm_unet_model(
         use_scale_shift_norm=use_scale_shift_norm,
         resblock_updown=resblock_updown,
         use_new_attention_order=use_new_attention_order,
+    )
+
+
+def create_adm_classifier_model(
+    image_size: int,
+    classifier_width: int = 128,
+    classifier_depth: int = 2,
+    classifier_attention_resolutions: str = "32,16,8",
+    classifier_use_scale_shift_norm: bool = True,
+    classifier_resblock_updown: bool = True,
+    classifier_pool: str = "attention",
+    use_fp16: bool = False,
+    num_classes: int = NUM_CLASSES,
+):
+    channel_mult = _default_channel_mult(image_size)
+    attention_ds = tuple(image_size // int(res) for res in classifier_attention_resolutions.split(","))
+    return EncoderUNetModel(
+        image_size=image_size,
+        in_channels=3,
+        model_channels=classifier_width,
+        out_channels=num_classes,
+        num_res_blocks=classifier_depth,
+        attention_resolutions=attention_ds,
+        channel_mult=channel_mult,
+        use_fp16=use_fp16,
+        num_head_channels=64,
+        use_scale_shift_norm=classifier_use_scale_shift_norm,
+        resblock_updown=classifier_resblock_updown,
+        pool=classifier_pool,
     )
