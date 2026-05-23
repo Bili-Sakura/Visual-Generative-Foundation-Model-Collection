@@ -13,7 +13,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import BaseOutput
 
 try:
-    from .modeling_adm import create_adm_unet_model
+    from modeling_adm import create_adm_unet_model
 except ImportError:
     import importlib
 

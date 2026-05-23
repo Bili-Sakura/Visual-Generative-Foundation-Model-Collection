@@ -4,17 +4,8 @@
     "JiTPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "scheduler": [
-    "diffusers",
-    "FlowMatchHeunDiscreteScheduler"
-  ],
   "transformer": [
-    "jit_transformer_2d",
+    "transformer_jit",
     "JiTTransformer2DModel"
-  ],
-  "id2label": {
-    "0": "tench, Tinca tinca",
-    "1": "goldfish, Carassius auratus",
-    "207": "golden retriever"
-  }
+  ]
 }

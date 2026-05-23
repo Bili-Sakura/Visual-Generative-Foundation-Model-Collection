@@ -1,7 +1,7 @@
 {
   "_class_name": [
     "pipeline",
-    "SiTPipeline"
+    "MVSplitDiTPipeline"
   ],
   "_diffusers_version": "0.31.0",
   "vae": [
@@ -9,7 +9,7 @@
     "AutoencoderKL"
   ],
   "transformer": [
-    "transformer_sit",
-    "SiTTransformer2DModel"
+    "transformer_mvsplit_dit",
+    "MVSplitDiTTransformer2DModel"
   ]
 }

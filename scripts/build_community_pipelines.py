@@ -37,6 +37,7 @@ LIB_TO_COMMUNITY: Dict[str, str] = {
     "JiT-diffusers": "JiT",
     "LightningDiT-diffusers": "LightningDiT",
     "MDT-diffusers": "MDT",
+    "MVSplit-DiT-diffusers": "MVSplit",
     "NiT-diffusers": "NiT",
     "PAE-diffusers": "PAE",
     "PixNerd-diffusers": "PixNerd",

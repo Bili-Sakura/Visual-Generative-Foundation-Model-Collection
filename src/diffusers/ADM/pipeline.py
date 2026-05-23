@@ -1,3 +1,9 @@
+"""Hub custom pipeline: ADMPipeline.
+Load with native Hugging Face diffusers and trust_remote_code=True.
+"""
+
+from __future__ import annotations
+
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,7 +25,6 @@ import torch
 
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import replace_example_docstring
 from diffusers.utils.torch_utils import randn_tensor
 
@@ -44,7 +49,6 @@ EXAMPLE_DOC_STRING = """
         ```
 """
 
-
 class ADMPipeline(DiffusionPipeline):
     r"""ADM/ADM-G pipeline compatible with Diffusers custom pipeline loading."""
 
@@ -54,7 +58,7 @@ class ADMPipeline(DiffusionPipeline):
     def __init__(
         self,
         unet,
-        scheduler: KarrasDiffusionSchedulers,
+        scheduler,
         classifier: Optional[Any] = None,
         id2label: Optional[Dict[str, str]] = None,
         null_class_id: int = 1000,
@@ -92,7 +96,7 @@ class ADMPipeline(DiffusionPipeline):
 
     @staticmethod
     def prepare_extra_step_kwargs(
-        scheduler: KarrasDiffusionSchedulers,
+        scheduler,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]],
         eta: float,
     ) -> Dict[str, Any]:

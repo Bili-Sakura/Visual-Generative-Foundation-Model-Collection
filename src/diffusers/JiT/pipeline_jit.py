@@ -4,30 +4,12 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
-# Copyright 2026 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.schedulers import FlowMatchHeunDiscreteScheduler, KarrasDiffusionSchedulers
 from diffusers.utils.torch_utils import randn_tensor
 
 RECOMMENDED_NOISE_BY_SIZE = {
@@ -53,13 +35,12 @@ class JiTPipeline(DiffusionPipeline):
     def __init__(
         self,
         transformer,
-        scheduler: FlowMatchHeunDiscreteScheduler,
+        scheduler,
         id2label: Optional[Dict[Union[int, str], str]] = None,
     ):
         super().__init__()
         scheduler = scheduler or FlowMatchHeunDiscreteScheduler(shift=4.0)
         self.register_modules(transformer=transformer, scheduler=scheduler)
-
         self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
         self._labels_loaded_from_model_index = bool(self._id2label)
@@ -105,18 +86,10 @@ class JiTPipeline(DiffusionPipeline):
 
     @property
     def id2label(self) -> Dict[int, str]:
-        """ImageNet class id to English label string (comma-separated synonyms)."""
         self._ensure_labels_loaded()
         return self._id2label
 
     def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
-        r"""
-        Map ImageNet label strings to class ids.
-
-        Args:
-            label (`str` or `list[str]`):
-                One or more English label strings. Each string must match a synonym in `id2label`.
-        """
         self._ensure_labels_loaded()
         label2id = self.labels
         if not label2id:
@@ -130,9 +103,7 @@ class JiTPipeline(DiffusionPipeline):
         missing = [item for item in label if item not in label2id]
         if missing:
             preview = ", ".join(list(label2id.keys())[:8])
-            raise ValueError(
-                f"Unknown English label(s): {missing}. Example valid labels: {preview}, ..."
-            )
+            raise ValueError(f"Unknown English label(s): {missing}. Example valid labels: {preview}, ...")
         return [label2id[item] for item in label]
 
     def _normalize_class_labels(
@@ -167,33 +138,10 @@ class JiTPipeline(DiffusionPipeline):
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
     ) -> Union[ImagePipelineOutput, Tuple]:
-        r"""
-        Generate class-conditional images.
-
-        Args:
-            class_labels (`int`, `str`, `list[int]`, or `list[str]`):
-                ImageNet class indices or human-readable English label strings.
-            guidance_scale (`float`, *optional*):
-                Classifier-free guidance scale. CFG is active when `guidance_scale > 1.0`.
-            guidance_interval_min (`float`, defaults to `0.1`):
-                Lower bound of the CFG interval in flow time `t in [0, 1]`.
-            guidance_interval_max (`float`, defaults to `1.0`):
-                Upper bound of the CFG interval in flow time.
-            noise_scale (`float`, *optional*):
-                Initial Gaussian noise scale (`1.0` for 256px, `2.0` for 512px by default).
-            t_eps (`float`, defaults to `5e-2`):
-                Epsilon clamp for the `1 - t` denominator, matching JiT source defaults.
-            generator (`torch.Generator`, *optional*):
-                RNG for reproducibility.
-            num_inference_steps (`int`, defaults to `50`):
-                Number of solver steps (at least 2).
-            output_type (`str`, *optional*, defaults to `"pil"`):
-                `"pil"`, `"np"`, or `"pt"`.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Return [`ImagePipelineOutput`] if True.
-        """
         if num_inference_steps < 2:
             raise ValueError("num_inference_steps must be >= 2.")
+        if output_type not in {"pil", "np", "pt"}:
+            raise ValueError("output_type must be one of: 'pil', 'np', 'pt'.")
 
         class_label_ids = self._normalize_class_labels(class_labels)
         do_classifier_free_guidance = guidance_scale is not None and guidance_scale > 1.0
@@ -210,22 +158,21 @@ class JiTPipeline(DiffusionPipeline):
                 f"height and width must be divisible by patch_size={patch_size}. Got {(height, width)}."
             )
         channels = int(self.transformer.config.in_channels)
-        null_class_val = int(self.transformer.config.num_classes)
+        null_class_val = int(
+            getattr(self.transformer.config, "num_classes", getattr(self.transformer.config, "num_class_embeds", 1000))
+        )
 
         if guidance_scale is None:
             guidance_scale = 1.0
         if noise_scale is None:
             noise_scale = RECOMMENDED_NOISE_BY_SIZE.get(max(height, width), 1.0)
 
-        latents = (
-            randn_tensor(
+        latents = randn_tensor(
                 shape=(batch_size, channels, height, width),
-                generator=generator,
-                device=self._execution_device,
-                dtype=self.transformer.dtype,
-            )
-            * noise_scale
-        )
+            generator=generator,
+            device=self._execution_device,
+            dtype=self.transformer.dtype,
+        ) * noise_scale
 
         class_labels_t = torch.tensor(class_label_ids, device=self._execution_device, dtype=torch.long).reshape(-1)
         class_labels_t = class_labels_t.clamp(0, null_class_val - 1)
@@ -286,3 +233,5 @@ class JiTPipeline(DiffusionPipeline):
         if not return_dict:
             return (images,)
         return ImagePipelineOutput(images=images)
+
+JiTPipelineOutput = ImagePipelineOutput

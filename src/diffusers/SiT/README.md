@@ -20,12 +20,10 @@ pipe.to("cuda")
 | --- | --- |
 | `pipeline.py` | `SiTPipeline` |
 | `transformer/` | transformer_sit.py |
-| `scheduler/` | scheduling_flow_match_sit.py |
 
 ## `model_index.json`
 
 Copy entries from `model_index.json.example` into your model repo after `save_pretrained`.
-Use `["_class_name"] = ["pipeline", "SiTPipeline"]`, custom module stems for each component, and include full
-English `id2label` in `model_index.json` (DiT-style).
+Use `["_class_name"] = ["pipeline", "SiTPipeline"]` and custom module stems for each component.
 
 Regenerate: `python scripts/build_community_pipelines.py`

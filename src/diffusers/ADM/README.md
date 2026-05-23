@@ -19,14 +19,12 @@ pipe.to("cuda")
 | Path | Purpose |
 | --- | --- |
 | `pipeline.py` | `ADMPipeline` |
-| `src/labels/` | Shared ImageNet id2label maps (`en` + `cn`) |
 | `unet/` | modeling_adm.py, unet_adm.py |
 | `scheduler/` | scheduling_adm.py, scheduling_adm_runtime.py |
 
 ## `model_index.json`
 
 Copy entries from `model_index.json.example` into your model repo after `save_pretrained`.
-Use `["_class_name"] = ["pipeline", "ADMPipeline"]`, custom module stems for each component, and include full
-English `id2label` in `model_index.json` (DiT-style).
+Use `["_class_name"] = ["pipeline", "ADMPipeline"]` and custom module stems for each component.
 
 Regenerate: `python scripts/build_community_pipelines.py`

@@ -10,9 +10,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.schedulers.scheduling_utils import SchedulerMixin
-from diffusers.utils import BaseOutput
+from _hf_utils import get_hf_diffusers_attr
+
+ConfigMixin = get_hf_diffusers_attr("configuration_utils", "ConfigMixin")
+register_to_config = get_hf_diffusers_attr("configuration_utils", "register_to_config")
+SchedulerMixin = get_hf_diffusers_attr("schedulers.scheduling_utils", "SchedulerMixin")
+BaseOutput = get_hf_diffusers_attr("utils", "BaseOutput")
 
 
 @dataclass

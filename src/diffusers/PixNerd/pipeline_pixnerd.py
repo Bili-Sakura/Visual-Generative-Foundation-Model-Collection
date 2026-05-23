@@ -1,3 +1,13 @@
+"""Hub custom pipeline: PixNerdPipeline.
+Load with native Hugging Face diffusers and trust_remote_code=True.
+"""
+
+from __future__ import annotations
+
+from diffusers.image_processor import VaeImageProcessor
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.utils import BaseOutput
+from diffusers.utils.torch_utils import randn_tensor
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,17 +22,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-
-from diffusers.image_processor import VaeImageProcessor
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.utils.torch_utils import randn_tensor
 
 DEFAULT_NATIVE_RESOLUTION = 512
 
@@ -62,7 +66,6 @@ EXAMPLE_DOC_STRING = """
 
 ConditioningInput = Union[int, str, List[Union[int, str]], torch.LongTensor]
 
-
 class PixNerdPipeline(DiffusionPipeline):
     r"""
     Pipeline for class-conditional PixNerd pixel-space image generation.
@@ -88,8 +91,8 @@ class PixNerdPipeline(DiffusionPipeline):
         self,
         transformer,
         scheduler,
-        vae=None,
-        conditioner=None,
+        vae: Optional[PixNerdPixelVAE] = None,
+        conditioner: Optional[PixNerdLabelConditioner] = None,
         id2label: Optional[Dict[Union[int, str], str]] = None,
     ):
         super().__init__()
@@ -106,10 +109,6 @@ class PixNerdPipeline(DiffusionPipeline):
             scheduler=scheduler,
         )
         self.image_processor = VaeImageProcessor(vae_scale_factor=1, do_normalize=False)
-        if id2label is None:
-            id2label = self._read_id2label_from_model_index(
-                getattr(getattr(self, "config", None), "_name_or_path", None)
-            )
         self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
         self._labels_loaded_from_model_index = bool(self._id2label)
@@ -127,17 +126,6 @@ class PixNerdPipeline(DiffusionPipeline):
                     return parameter.device
         return torch.device("cpu")
 
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path=None, *args, **kwargs):
-        id2label_override = kwargs.pop("id2label", None)
-        pipe = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
-        id2label = id2label_override or cls._read_id2label_from_model_index(pretrained_model_name_or_path)
-        if id2label:
-            pipe._id2label = cls._normalize_id2label(id2label)
-            pipe.labels = cls._build_label2id(pipe._id2label)
-            pipe._labels_loaded_from_model_index = True
-        return pipe
-
     def _ensure_labels_loaded(self) -> None:
         if self._labels_loaded_from_model_index:
             return
@@ -154,7 +142,7 @@ class PixNerdPipeline(DiffusionPipeline):
         return {int(key): value for key, value in id2label.items()}
 
     @staticmethod
-    def _read_id2label_from_model_index(variant_path: Optional[Union[str, Path]]) -> Dict[int, str]:
+    def _read_id2label_from_model_index(variant_path: Optional[str]) -> Dict[int, str]:
         if not variant_path:
             return {}
         model_index_path = Path(variant_path).resolve() / "model_index.json"
@@ -428,6 +416,5 @@ class PixNerdPipeline(DiffusionPipeline):
         if not return_dict:
             return (image,)
         return ImagePipelineOutput(images=image)
-
 
 PixNerdPipelineOutput = ImagePipelineOutput

@@ -1,31 +1,20 @@
-# Copyright 2026 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+from __future__ import annotations
 
+import argparse
 import math
+from collections.abc import Mapping
+from typing import Dict, Literal, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import RMSNorm
-from diffusers.utils import logging
 
-logger = logging.get_logger(__name__)
+from jit_weights import JIT_PRESET_CONFIGS, remap_legacy_state_dict
 
 
 def broadcat(tensors, dim=-1):
@@ -37,10 +26,8 @@ def broadcat(tensors, dim=-1):
     dim = (dim + shape_len) if dim < 0 else dim
     dims = list(zip(*(list(t.shape) for t in tensors)))
     expandable_dims = [(i, val) for i, val in enumerate(dims) if i != dim]
-
     if not all(len(set(t[1])) <= 2 for t in expandable_dims):
         raise ValueError("invalid dimensions for broadcastable concatenation")
-
     max_dims = [(t[0], max(t[1])) for t in expandable_dims]
     expanded_dims = [(t[0], (t[1],) * num_tensors) for t in max_dims]
     expanded_dims.insert(dim, (dim, dims[dim]))
@@ -74,13 +61,13 @@ class JiTRotaryEmbedding(nn.Module):
         self.custom_freqs = custom_freqs
         if ft_seq_len is None:
             ft_seq_len = pt_seq_len
-        self._cached_hw = None
+        self._cached_hw: tuple[int, int] | None = None
         cos, sin = self._build_freqs(ft_seq_len, ft_seq_len, device=torch.device("cpu"))
         self.register_buffer("freqs_cos", cos, persistent=False)
         self.register_buffer("freqs_sin", sin, persistent=False)
         self._cached_hw = (ft_seq_len, ft_seq_len)
 
-    def _build_freqs(self, height, width, device):
+    def _build_freqs(self, height: int, width: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         if self.custom_freqs is not None:
             freqs = self.custom_freqs.to(device=device, dtype=torch.float32)
         else:
@@ -104,9 +91,8 @@ class JiTRotaryEmbedding(nn.Module):
             sin_img = torch.cat([sin_pad, sin_img], dim=0)
         return cos_img, sin_img
 
-    def forward(self, t, height=None, width=None):
-        # Applied on (batch, seq_len, heads, head_dim) tensors from attention.
-        seq_len = t.shape[1]
+    def forward(self, tensor, height: int | None = None, width: int | None = None):
+        seq_len = tensor.shape[1]
         if height is None or width is None:
             image_tokens = seq_len - self.num_cls_token
             size = int(image_tokens**0.5)
@@ -116,13 +102,12 @@ class JiTRotaryEmbedding(nn.Module):
                 )
             height = size
             width = size
-        if self._cached_hw != (height, width) or self.freqs_cos.device != t.device:
-            self.freqs_cos, self.freqs_sin = self._build_freqs(height, width, device=t.device)
+        if self._cached_hw != (height, width) or self.freqs_cos.device != tensor.device:
+            self.freqs_cos, self.freqs_sin = self._build_freqs(height, width, device=tensor.device)
             self._cached_hw = (height, width)
-        freqs_cos = self.freqs_cos[:seq_len].to(t.dtype)
-        freqs_sin = self.freqs_sin[:seq_len].to(t.dtype)
-
-        return t * freqs_cos[:, None, :] + rotate_half(t) * freqs_sin[:, None, :]
+        freqs_cos = self.freqs_cos[:seq_len].to(device=tensor.device, dtype=tensor.dtype)
+        freqs_sin = self.freqs_sin[:seq_len].to(device=tensor.device, dtype=tensor.dtype)
+        return tensor * freqs_cos[:, None, :] + rotate_half(tensor) * freqs_sin[:, None, :]
 
 
 def modulate(x, shift, scale):
@@ -130,8 +115,6 @@ def modulate(x, shift, scale):
 
 
 class JiTPatchEmbed(nn.Module):
-    """Image to Patch Embedding with Bottleneck"""
-
     def __init__(self, img_size=224, patch_size=16, in_chans=3, pca_dim=768, embed_dim=768, bias=True):
         super().__init__()
         img_size = (img_size, img_size)
@@ -139,20 +122,14 @@ class JiTPatchEmbed(nn.Module):
         self.img_size = img_size
         self.patch_size = patch_size
         self.num_patches = (img_size[1] // patch_size[1]) * (img_size[0] // patch_size[0])
-
         self.proj1 = nn.Conv2d(in_chans, pca_dim, kernel_size=patch_size, stride=patch_size, bias=False)
         self.proj2 = nn.Conv2d(pca_dim, embed_dim, kernel_size=1, stride=1, bias=bias)
 
     def forward(self, x):
-        x = self.proj2(self.proj1(x)).flatten(2).transpose(1, 2)
-        return x
+        return self.proj2(self.proj1(x)).flatten(2).transpose(1, 2)
 
 
 class JiTTimestepEmbedder(nn.Module):
-    """
-    Embeds scalar timesteps into vector representations.
-    """
-
     def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -164,13 +141,10 @@ class JiTTimestepEmbedder(nn.Module):
 
     @staticmethod
     def timestep_embedding(t, dim, max_period=10000):
-        """
-        Create sinusoidal timestep embeddings.
-        """
         half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
-        ).to(device=t.device)
+        freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
+            device=t.device
+        )
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
@@ -181,23 +155,17 @@ class JiTTimestepEmbedder(nn.Module):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         if dtype is not None:
             t_freq = t_freq.to(dtype=dtype)
-        t_emb = self.mlp(t_freq)
-        return t_emb
+        return self.mlp(t_freq)
 
 
 class JiTLabelEmbedder(nn.Module):
-    """
-    Embeds class labels into vector representations.
-    """
-
     def __init__(self, num_classes, hidden_size):
         super().__init__()
         self.embedding_table = nn.Embedding(num_classes + 1, hidden_size)
         self.num_classes = num_classes
 
     def forward(self, labels):
-        embeddings = self.embedding_table(labels)
-        return embeddings
+        return self.embedding_table(labels)
 
 
 class JiTAttention(nn.Module):
@@ -205,23 +173,19 @@ class JiTAttention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
-
         self.q_norm = RMSNorm(head_dim, eps=eps) if qk_norm else nn.Identity()
         self.k_norm = RMSNorm(head_dim, eps=eps) if qk_norm else nn.Identity()
-
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = attn_drop
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, rope=None, grid_height=None, grid_width=None):
-        B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+    def forward(self, x, rope=None, grid_height: int | None = None, grid_width: int | None = None):
+        batch_size, num_tokens, channels = x.shape
+        qkv = self.qkv(x).reshape(batch_size, num_tokens, 3, self.num_heads, channels // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
-
         q = self.q_norm(q)
         k = self.k_norm(k)
-
         if rope is not None:
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
@@ -232,7 +196,7 @@ class JiTAttention(nn.Module):
 
         dropout_p = self.attn_drop if self.training else 0.0
         x = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
-        x = x.transpose(1, 2).reshape(B, N, C)
+        x = x.transpose(1, 2).reshape(batch_size, num_tokens, channels)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -267,30 +231,20 @@ class JiTBlock(nn.Module):
             eps=eps,
         )
         self.norm2 = RMSNorm(hidden_size, eps=eps)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        self.mlp = JiTSwiGLUFFN(hidden_size, mlp_hidden_dim, drop=proj_drop)
-
+        self.mlp = JiTSwiGLUFFN(hidden_size, int(hidden_size * mlp_ratio), drop=proj_drop)
         self.act = nn.SiLU()
         self.adaLN_modulation = nn.Linear(hidden_size, 6 * hidden_size, bias=True)
 
-    def forward(self, x, c, feat_rope=None, grid_height=None, grid_width=None):
-        # Apply activation
+    def forward(self, x, c, feat_rope=None, grid_height: int | None = None, grid_width: int | None = None):
         c = self.act(c)
-
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-
-        # Attention block
-        norm_x = self.norm1(x)
-        modulated_x = modulate(norm_x, shift_msa, scale_msa)
-        attn_out = self.attn(modulated_x, rope=feat_rope, grid_height=grid_height, grid_width=grid_width)
-        x = x + gate_msa.unsqueeze(1) * attn_out
-
-        # MLP block
-        norm_x = self.norm2(x)
-        modulated_x = modulate(norm_x, shift_mlp, scale_mlp)
-        mlp_out = self.mlp(modulated_x)
-        x = x + gate_mlp.unsqueeze(1) * mlp_out
-
+        x = x + gate_msa.unsqueeze(1) * self.attn(
+            modulate(self.norm1(x), shift_msa, scale_msa),
+            rope=feat_rope,
+            grid_height=grid_height,
+            grid_width=grid_width,
+        )
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 
@@ -309,67 +263,23 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
 def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     if embed_dim % 2 != 0:
         raise ValueError(f"embed_dim must be divisible by 2, but got {embed_dim}")
-
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])
-    emb = np.concatenate([emb_h, emb_w], axis=1)
-    return emb
+    return np.concatenate([emb_h, emb_w], axis=1)
 
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     if embed_dim % 2 != 0:
         raise ValueError(f"embed_dim must be divisible by 2, but got {embed_dim}")
-
     omega = np.arange(embed_dim // 2, dtype=np.float64)
     omega /= embed_dim / 2.0
     omega = 1.0 / 10000**omega
-
     pos = pos.reshape(-1)
     out = np.einsum("m,d->md", pos, omega)
-
-    emb_sin = np.sin(out)
-    emb_cos = np.cos(out)
-
-    emb = np.concatenate([emb_sin, emb_cos], axis=1)
-    return emb
+    return np.concatenate([np.sin(out), np.cos(out)], axis=1)
 
 
 class JiTTransformer2DModel(ModelMixin, ConfigMixin):
-    r"""
-    A 2D Transformer for pixel-space class-conditional generation with JiT
-    ([Back to Basics: Let Denoising Generative Models Denoise](https://arxiv.org/abs/2511.13720)).
-
-    Parameters:
-        sample_size (`int`, defaults to `256`):
-            Input image resolution (height and width).
-        patch_size (`int`, defaults to `16`):
-            Patch size for the bottleneck patch embedder.
-        in_channels (`int`, defaults to `3`):
-            Number of input image channels.
-        hidden_size (`int`, defaults to `768`):
-            Transformer hidden dimension.
-        num_layers (`int`, defaults to `12`):
-            Number of JiT transformer blocks.
-        num_attention_heads (`int`, defaults to `12`):
-            Number of attention heads per block.
-        mlp_ratio (`float`, defaults to `4.0`):
-            MLP hidden dimension multiplier.
-        attention_dropout (`float`, defaults to `0.0`):
-            Attention dropout in the middle quarter of blocks.
-        dropout (`float`, defaults to `0.0`):
-            Projection dropout in the middle quarter of blocks.
-        num_classes (`int`, defaults to `1000`):
-            Number of class labels (null label uses index `num_classes` for CFG).
-        bottleneck_dim (`int`, defaults to `128`):
-            PCA bottleneck dimension in the patch embedder.
-        in_context_len (`int`, defaults to `32`):
-            Number of in-context class tokens prepended mid-network.
-        in_context_start (`int`, defaults to `4`):
-            Block index at which in-context tokens are inserted.
-        norm_eps (`float`, defaults to `1e-6`):
-            Epsilon for RMSNorm layers.
-    """
-
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = ["pos_embed", "norm"]
 
@@ -390,8 +300,27 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
         in_context_len: int = 32,
         in_context_start: int = 4,
         norm_eps: float = 1e-6,
+        model_type: str | None = None,
+        num_class_embeds: int | None = None,
     ):
         super().__init__()
+        if num_class_embeds is not None:
+            num_classes = int(num_class_embeds)
+        if model_type in JIT_PRESET_CONFIGS:
+            preset = JIT_PRESET_CONFIGS[model_type]
+            sample_size = int(preset["sample_size"])
+            patch_size = int(preset["patch_size"])
+            hidden_size = int(preset["hidden_size"])
+            num_layers = int(preset["num_layers"])
+            num_attention_heads = int(preset["num_attention_heads"])
+            bottleneck_dim = int(preset["bottleneck_dim"])
+            in_context_len = int(preset["in_context_len"])
+            in_context_start = int(preset["in_context_start"])
+            if attention_dropout == 0.0:
+                attention_dropout = float(preset["attention_dropout"])
+            if dropout == 0.0:
+                dropout = float(preset["dropout"])
+
         self.sample_size = sample_size
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -404,11 +333,8 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
         self.norm_eps = norm_eps
         self.gradient_checkpointing = False
 
-        # Time and Class Embedding
         self.t_embedder = JiTTimestepEmbedder(hidden_size)
         self.y_embedder = JiTLabelEmbedder(num_classes, hidden_size)
-
-        # Patch Embedding
         self.x_embedder = JiTPatchEmbed(
             img_size=sample_size,
             patch_size=patch_size,
@@ -418,24 +344,22 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
             bias=True,
         )
 
-        # Positional Embedding (Fixed Sin-Cos)
         num_patches = self.x_embedder.num_patches
         pos_embed = get_2d_sincos_pos_embed(hidden_size, int(num_patches**0.5))
         self.register_buffer("pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0), persistent=True)
 
-        # In-context Embedding
         if self.in_context_len > 0:
             self.in_context_posemb = nn.Parameter(torch.zeros(1, self.in_context_len, hidden_size))
 
-        # RoPE
         half_head_dim = hidden_size // num_attention_heads // 2
         hw_seq_len = sample_size // patch_size
         self.feat_rope = JiTRotaryEmbedding(dim=half_head_dim, pt_seq_len=hw_seq_len, num_cls_token=0)
         self.feat_rope_incontext = JiTRotaryEmbedding(
-            dim=half_head_dim, pt_seq_len=hw_seq_len, num_cls_token=self.in_context_len
+            dim=half_head_dim,
+            pt_seq_len=hw_seq_len,
+            num_cls_token=self.in_context_len,
         )
 
-        # Blocks
         self.blocks = nn.ModuleList(
             [
                 JiTBlock(
@@ -450,21 +374,20 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
             ]
         )
 
-        # Final Layer
         self.norm_final = RMSNorm(hidden_size, eps=norm_eps)
         self.linear_final = nn.Linear(hidden_size, patch_size * patch_size * self.out_channels, bias=True)
         self.act_final = nn.SiLU()
         self.adaLN_modulation_final = nn.Linear(hidden_size, 2 * hidden_size, bias=True)
 
-    def _get_patch_grid(self, hidden_states):
-        height, width = hidden_states.shape[-2:]
+    def _get_patch_grid(self, sample: torch.Tensor) -> tuple[int, int]:
+        height, width = sample.shape[-2:]
         if height % self.patch_size != 0 or width % self.patch_size != 0:
             raise ValueError(
                 f"Input size {(height, width)} must be divisible by patch_size={self.patch_size}."
             )
         return height // self.patch_size, width // self.patch_size
 
-    def _interpolate_pos_encoding(self, tokens, grid_height, grid_width):
+    def _interpolate_pos_encoding(self, tokens: torch.Tensor, grid_height: int, grid_width: int) -> torch.Tensor:
         num_tokens = grid_height * grid_width
         if self.pos_embed.shape[1] == num_tokens:
             return self.pos_embed.to(device=tokens.device, dtype=tokens.dtype)
@@ -476,24 +399,26 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
+        sample: torch.Tensor,
         timestep: torch.LongTensor,
         class_labels: torch.LongTensor,
         interpolate_pos_encoding: bool = True,
         return_dict: bool = True,
     ):
+        timestep = torch.as_tensor(timestep, device=sample.device)
+        if timestep.ndim == 0:
+            timestep = timestep.repeat(sample.shape[0])
+        else:
+            timestep = timestep.reshape(-1)
+            if timestep.shape[0] == 1 and sample.shape[0] > 1:
+                timestep = timestep.repeat(sample.shape[0])
 
-        t_emb = self.t_embedder(timestep, dtype=hidden_states.dtype)
-        y_emb = self.y_embedder(class_labels)
-
-        # Ensure embeddings match hidden_states dtype
-        y_emb = y_emb.to(dtype=hidden_states.dtype)
-
+        t_emb = self.t_embedder(timestep, dtype=sample.dtype)
+        y_emb = self.y_embedder(class_labels).to(dtype=sample.dtype)
         c = t_emb + y_emb
 
-        # Patch Embed
-        grid_height, grid_width = self._get_patch_grid(hidden_states)
-        x = self.x_embedder(hidden_states)
+        grid_height, grid_width = self._get_patch_grid(sample)
+        x = self.x_embedder(sample)
         if interpolate_pos_encoding:
             pos_embed = self._interpolate_pos_encoding(x, grid_height, grid_width)
         else:
@@ -506,7 +431,6 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
             pos_embed = self.pos_embed.to(device=x.device, dtype=x.dtype)
         x = x + pos_embed
 
-        # Blocks
         for i, block in enumerate(self.blocks):
             if self.in_context_len > 0 and i == self.in_context_start:
                 in_context_tokens = y_emb.unsqueeze(1).repeat(1, self.in_context_len, 1)
@@ -514,38 +438,28 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
                 x = torch.cat([in_context_tokens, x], dim=1)
 
             rope = self.feat_rope if i < self.in_context_start else self.feat_rope_incontext
-
             if self.training and self.gradient_checkpointing:
-                def custom_forward(current_x, current_c):
+                def custom_forward(hidden_states, conditioning):
                     return block(
-                        current_x,
-                        current_c,
+                        hidden_states,
+                        conditioning,
                         feat_rope=rope,
                         grid_height=grid_height,
                         grid_width=grid_width,
                     )
 
-                x = torch.utils.checkpoint.checkpoint(
-                    custom_forward,
-                    x,
-                    c,
-                    use_reentrant=False,
-                )
+                x = torch.utils.checkpoint.checkpoint(custom_forward, x, c, use_reentrant=False)
             else:
                 x = block(x, c, feat_rope=rope, grid_height=grid_height, grid_width=grid_width)
 
-        # Slice off in-context tokens
         if self.in_context_len > 0:
             x = x[:, self.in_context_len :]
 
-        # Final Layer
         c = self.act_final(c)
         shift, scale = self.adaLN_modulation_final(c).chunk(2, dim=1)
-
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear_final(x)
 
-        # Unpatchify
         x = x.reshape(shape=(x.shape[0], grid_height, grid_width, self.patch_size, self.patch_size, self.out_channels))
         x = torch.einsum("nhwpqc->nchpwq", x)
         output = x.reshape(
@@ -554,24 +468,16 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
 
         if not return_dict:
             return (output,)
-
         return Transformer2DModelOutput(sample=output)
 
     @classmethod
     def from_jit_checkpoint(
         cls,
         checkpoint_path: str,
-        weights: str = "ema1",
+        weights: Literal["model", "ema1", "ema2"] = "ema1",
         map_location: str = "cpu",
         strict: bool = True,
-    ):
-        """Load an official JiT ``.pth`` checkpoint into the native diffusers model."""
-        import argparse
-        from collections.abc import Mapping
-        from typing import Any
-
-        from jit_weights import JIT_PRESET_CONFIGS, remap_legacy_state_dict
-
+    ) -> Tuple["JiTTransformer2DModel", Dict[str, object]]:
         checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
         if "args" not in checkpoint:
             raise ValueError("Checkpoint is missing 'args', cannot infer JiT architecture config.")
@@ -590,11 +496,14 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
 
         config = dict(JIT_PRESET_CONFIGS[model_type])
         config["num_classes"] = int(args_dict.get("class_num") or args_dict.get("num_classes") or 1000)
+        config["model_type"] = model_type
+        config["attention_dropout"] = float(args_dict.get("attn_dropout", args_dict.get("attention_dropout", config["attention_dropout"])))
+        config["dropout"] = float(args_dict.get("proj_dropout", args_dict.get("dropout", config["dropout"])))
         model = cls(**config)
 
         key = "model" if weights == "model" else f"model_{weights}"
         if key not in checkpoint:
-            raise ValueError(f"Checkpoint key '{key}' not found. Available: {list(checkpoint.keys())}")
+            raise ValueError(f"Checkpoint key '{key}' not found. Available keys: {list(checkpoint.keys())}")
 
         state_dict = remap_legacy_state_dict(checkpoint[key])
         model.load_state_dict(state_dict, strict=strict)
@@ -604,5 +513,38 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
             "weights": weights,
             "epoch": checkpoint.get("epoch"),
             "model_type": model_type,
+            "source_args": checkpoint.get("args"),
         }
         return model, metadata
+
+    def to_jit_checkpoint(
+        self,
+        ema_mode: Literal["none", "copy_to_both"] = "copy_to_both",
+        prefix: str = "net.",
+    ) -> Dict[str, object]:
+        base_state: Dict[str, torch.Tensor] = {}
+        for key, value in self.state_dict().items():
+            legacy_key = key
+            if legacy_key.startswith("norm_final"):
+                legacy_key = legacy_key.replace("norm_final", "final_layer.norm_final", 1)
+            if legacy_key.startswith("linear_final"):
+                legacy_key = legacy_key.replace("linear_final", "final_layer.linear", 1)
+            if legacy_key.startswith("adaLN_modulation_final"):
+                legacy_key = legacy_key.replace("adaLN_modulation_final", "final_layer.adaLN_modulation", 1)
+            legacy_key = legacy_key.replace(".adaLN_modulation.", ".adaLN_modulation.1.")
+            base_state[f"{prefix}{legacy_key}"] = value.detach().cpu()
+
+        checkpoint = {"model": base_state}
+        if ema_mode == "copy_to_both":
+            checkpoint["model_ema1"] = {k: v.clone() for k, v in base_state.items()}
+            checkpoint["model_ema2"] = {k: v.clone() for k, v in base_state.items()}
+        elif ema_mode != "none":
+            raise ValueError(f"Unsupported ema_mode='{ema_mode}'.")
+        return checkpoint
+
+    @property
+    def net(self):
+        return self
+
+
+JiTDiffusersModel = JiTTransformer2DModel

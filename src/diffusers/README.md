@@ -16,6 +16,7 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | JiT | [JiT/](JiT/) |
 | LightningDiT | [LightningDiT/](LightningDiT/) |
 | MDT | [MDT/](MDT/) |
+| MVSplit | [MVSplit/](MVSplit/) |
 | NiT | [NiT/](NiT/) |
 | PAE | [PAE/](PAE/) |
 | PixNerd | [PixNerd/](PixNerd/) |

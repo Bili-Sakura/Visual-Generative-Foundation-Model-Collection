@@ -1,3 +1,9 @@
+"""Hub custom pipeline: NiTPipeline.
+Load with native Hugging Face diffusers and trust_remote_code=True.
+"""
+
+from __future__ import annotations
+
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,10 +26,7 @@ import torch
 
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
-
-# Local component classes are loaded dynamically in from_pretrained.
 
 DEFAULT_NATIVE_RESOLUTION = 512
 
@@ -31,8 +34,8 @@ EXAMPLE_DOC_STRING = """
     Examples:
         ```py
         >>> from pathlib import Path
-        >>> import torch
         >>> from diffusers import DiffusionPipeline
+        >>> import torch
 
         >>> model_dir = Path("./NiT-XL").resolve()
         >>> pipe = DiffusionPipeline.from_pretrained(
@@ -57,26 +60,18 @@ EXAMPLE_DOC_STRING = """
         ...     guidance_interval=(0.0, 0.7),
         ...     generator=generator,
         ... ).images[0]
-        >>> image.save("demo.png")
         ```
 """
-
 
 class NiTPipeline(DiffusionPipeline):
     r"""
     Pipeline for native-resolution class-conditional image generation with NiT.
 
-    Uses the native [`FlowMatchEulerDiscreteScheduler`] in deterministic (ODE) mode.
-    The official NiT repo defaults to an Euler-Maruyama SDE sampler for 512×512; that SDE is
-    not the same as the scheduler's `stochastic_sampling` path, so keep
-    `scheduler.config.stochastic_sampling=False` and let the scheduler perform the ODE update
-    `x_{t+dt} = x_t + dt * v`.
-
     Parameters:
         transformer ([`NiTTransformer2DModel`]):
             Class-conditional transformer that predicts flow-matching velocity in packed latent space.
         scheduler ([`FlowMatchEulerDiscreteScheduler`]):
-            Native diffusers flow-matching Euler scheduler (`stochastic_sampling=False`).
+            Flow-matching Euler scheduler used by NiT.
         vae ([`AutoencoderDC`] or [`AutoencoderKL`], *optional*):
             Variational autoencoder used to decode packed transformer latents to pixels.
         id2label (`dict[int, str]`, *optional*):
@@ -99,95 +94,6 @@ class NiTPipeline(DiffusionPipeline):
         self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
         self._labels_loaded_from_model_index = bool(self._id2label)
-
-    @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path=None, subfolder=None, **kwargs):
-        """Load a self-contained variant folder locally or from the Hub."""
-        import importlib
-        import sys
-
-        repo_root = Path(__file__).resolve().parent
-
-        if pretrained_model_name_or_path in (None, "", "."):
-            variant = repo_root
-        elif (
-            isinstance(pretrained_model_name_or_path, str)
-            and "/" in pretrained_model_name_or_path
-            and not Path(pretrained_model_name_or_path).exists()
-        ):
-            from huggingface_hub import snapshot_download
-
-            hub_kwargs = dict(kwargs.pop("hub_kwargs", {}))
-            if subfolder:
-                hub_kwargs.setdefault("allow_patterns", [f"{subfolder}/**"])
-            cache_dir = snapshot_download(pretrained_model_name_or_path, **hub_kwargs)
-            variant = Path(cache_dir) / subfolder if subfolder else Path(cache_dir)
-        else:
-            variant = Path(pretrained_model_name_or_path)
-            if not variant.is_absolute():
-                candidate = (Path.cwd() / variant).resolve()
-                variant = candidate if candidate.exists() else (repo_root / variant).resolve()
-            if subfolder:
-                variant = variant / subfolder
-
-        id2label_override = kwargs.pop("id2label", None)
-        model_kwargs = dict(kwargs)
-        inserted: List[str] = []
-
-        def _load_component(folder: str, module_name: str, class_name: str):
-            comp_dir = variant / folder
-            module_path = comp_dir / f"{module_name}.py"
-            has_weights = (comp_dir / "config.json").exists() or (comp_dir / "scheduler_config.json").exists()
-            if not module_path.exists() or not has_weights:
-                return None
-
-            comp_path = str(comp_dir)
-            if comp_path not in sys.path:
-                sys.path.insert(0, comp_path)
-                inserted.append(comp_path)
-
-            module = importlib.import_module(module_name)
-            component_cls = getattr(module, class_name)
-            return component_cls.from_pretrained(str(comp_dir), **model_kwargs)
-
-        try:
-            transformer = _load_component("transformer", "nit_transformer_2d", "NiTTransformer2DModel")
-            try:
-                scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(str(variant), subfolder="scheduler")
-            except Exception:
-                scheduler = FlowMatchEulerDiscreteScheduler(
-                    num_train_timesteps=1000,
-                    shift=1.0,
-                    stochastic_sampling=False,
-                )
-            if transformer is None:
-                raise ValueError(f"No loadable transformer found under {variant}")
-
-            vae = None
-            vae_dir = variant / "vae"
-            if vae_dir.exists() and (vae_dir / "config.json").exists():
-                from diffusers import AutoencoderDC, AutoencoderKL
-
-                vae_class_name = json.loads((vae_dir / "config.json").read_text(encoding="utf-8")).get(
-                    "_class_name", "AutoencoderDC"
-                )
-                vae_cls = AutoencoderDC if vae_class_name == "AutoencoderDC" else AutoencoderKL
-                vae = vae_cls.from_pretrained(str(vae_dir), **model_kwargs)
-
-            id2label = id2label_override or cls._read_id2label_from_model_index(str(variant))
-            pipe = cls(
-                transformer=transformer,
-                scheduler=scheduler,
-                vae=vae,
-                id2label=id2label,
-            )
-            if hasattr(pipe, "register_to_config"):
-                pipe.register_to_config(_name_or_path=str(variant))
-            return pipe
-        finally:
-            for comp_path in inserted:
-                if comp_path in sys.path:
-                    sys.path.remove(comp_path)
 
     def _ensure_labels_loaded(self) -> None:
         if self._labels_loaded_from_model_index:
@@ -339,11 +245,6 @@ class NiTPipeline(DiffusionPipeline):
         )
         return packed_latents, image_sizes
 
-    @staticmethod
-    def _flow_time_from_scheduler_timestep(timestep: torch.Tensor, num_train_timesteps: int) -> float:
-        """Map native scheduler timesteps (sigma * num_train_timesteps) to NiT flow time in [0, 1]."""
-        return float(timestep) / num_train_timesteps
-
     def _apply_classifier_free_guidance(
         self,
         model_output: torch.Tensor,
@@ -407,8 +308,7 @@ class NiTPipeline(DiffusionPipeline):
             guidance_scale (`float`, defaults to `1.0`):
                 Classifier-free guidance scale. CFG is active when `guidance_scale > 1.0`.
             guidance_interval (`tuple[float, float]`, defaults to `(0.0, 1.0)`):
-                Flow-time interval where CFG is applied. Uses continuous flow time
-                `timestep / num_train_timesteps`, matching the official NiT ODE sampler.
+                Flow-time interval where CFG is applied.
             generator (`torch.Generator`, *optional*):
                 RNG for reproducibility.
             output_type (`str`, defaults to `"pil"`):
@@ -421,14 +321,6 @@ class NiTPipeline(DiffusionPipeline):
         width = int(width or default_size)
         self.check_inputs(height, width, num_inference_steps, output_type)
 
-        if getattr(self.scheduler.config, "stochastic_sampling", False):
-            raise ValueError(
-                "NiT expects deterministic FlowMatchEulerDiscreteScheduler stepping "
-                "(scheduler.config.stochastic_sampling=False). The scheduler's stochastic_sampling "
-                "path uses a different update rule than the official NiT Euler-Maruyama SDE and "
-                "produces salt-and-pepper noise."
-            )
-
         device = self._execution_device
         model_dtype = next(self.transformer.parameters()).dtype
         class_labels_tensor = self._normalize_class_labels(class_labels)
@@ -440,11 +332,19 @@ class NiTPipeline(DiffusionPipeline):
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         num_train_timesteps = self.scheduler.config.num_train_timesteps
 
+        if getattr(self.scheduler.config, "stochastic_sampling", False):
+            raise ValueError(
+                "NiT expects deterministic FlowMatchEulerDiscreteScheduler stepping "
+                "(scheduler.config.stochastic_sampling=False). The scheduler's stochastic_sampling "
+                "path uses a different update rule than the official NiT Euler-Maruyama SDE and "
+                "produces salt-and-pepper noise."
+            )
+
         null_labels = torch.full_like(class_labels_tensor, self.transformer.config.num_classes)
         guidance_low, guidance_high = guidance_interval
 
         for t in self.progress_bar(self.scheduler.timesteps):
-            flow_time = self._flow_time_from_scheduler_timestep(t, num_train_timesteps)
+            flow_time = float(t) / num_train_timesteps
             guidance_active = guidance_low <= flow_time <= guidance_high
             if guidance_scale > 1.0 and guidance_active:
                 model_input = torch.cat([packed_latents, packed_latents], dim=0)
@@ -478,6 +378,5 @@ class NiTPipeline(DiffusionPipeline):
         if not return_dict:
             return (image,)
         return ImagePipelineOutput(images=image)
-
 
 NiTPipelineOutput = ImagePipelineOutput

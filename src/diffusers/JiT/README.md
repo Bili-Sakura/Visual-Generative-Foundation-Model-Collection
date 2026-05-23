@@ -4,13 +4,10 @@ Load checkpoints with **native Hugging Face diffusers** and this folder on the H
 
 ```python
 import torch
-from pathlib import Path
 from diffusers import DiffusionPipeline
 
-model_dir = Path("BiliSakura/JiT-diffusers")
 pipe = DiffusionPipeline.from_pretrained(
-    str(model_dir),
-    custom_pipeline=str(model_dir / "pipeline.py"),
+    "BiliSakura/JiT-diffusers",
     trust_remote_code=True,
     torch_dtype=torch.float16,
 )
@@ -22,13 +19,11 @@ pipe.to("cuda")
 | Path | Purpose |
 | --- | --- |
 | `pipeline.py` | `JiTPipeline` |
-| `transformer/` | jit_transformer_2d.py, jit_weights.py |
-| `scheduler/` | scheduler_config.json |
+| `transformer/` | jit_weights.py, transformer_jit.py |
 
 ## `model_index.json`
 
 Copy entries from `model_index.json.example` into your model repo after `save_pretrained`.
-Use `["_class_name"] = ["pipeline", "JiTPipeline"]`, use built-in scheduler entries from `diffusers`, and include full
-English `id2label` in `model_index.json` (DiT-style).
+Use `["_class_name"] = ["pipeline", "JiTPipeline"]` and custom module stems for each component.
 
 Regenerate: `python scripts/build_community_pipelines.py`

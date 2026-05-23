@@ -1,4 +1,4 @@
-# NiT — Hub custom pipeline
+# MVSplit — Hub custom pipeline
 
 Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub (or via `custom_pipeline`):
 
@@ -7,7 +7,7 @@ import torch
 from diffusers import DiffusionPipeline
 
 pipe = DiffusionPipeline.from_pretrained(
-    "BiliSakura/NiT-diffusers",
+    "BiliSakura/MVSplit-DiT-diffusers",
     trust_remote_code=True,
     torch_dtype=torch.float16,
 )
@@ -18,13 +18,12 @@ pipe.to("cuda")
 
 | Path | Purpose |
 | --- | --- |
-| `pipeline.py` | `NiTPipeline` |
-| `transformer/` | transformer_nit.py |
-| `scheduler/` | scheduling_flow_match_nit.py |
+| `pipeline.py` | `MVSplitDiTPipeline` |
+| `transformer/` | transformer_mvsplit_dit.py |
 
 ## `model_index.json`
 
 Copy entries from `model_index.json.example` into your model repo after `save_pretrained`.
-Use `["_class_name"] = ["pipeline", "NiTPipeline"]` and custom module stems for each component.
+Use `["_class_name"] = ["pipeline", "MVSplitDiTPipeline"]` and custom module stems for each component.
 
 Regenerate: `python scripts/build_community_pipelines.py`
