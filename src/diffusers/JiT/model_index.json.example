@@ -5,8 +5,8 @@
   ],
   "_diffusers_version": "0.31.0",
   "scheduler": [
-    "scheduling_jit",
-    "JiTScheduler"
+    "diffusers",
+    "FlowMatchHeunDiscreteScheduler"
   ],
   "transformer": [
     "jit_transformer_2d",

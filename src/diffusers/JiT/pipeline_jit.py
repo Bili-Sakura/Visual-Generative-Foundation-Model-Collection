@@ -22,11 +22,12 @@ import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers import FlowMatchHeunDiscreteScheduler, KarrasDiffusionSchedulers
 from diffusers.utils.torch_utils import randn_tensor
 
 RECOMMENDED_NOISE_BY_SIZE = {
@@ -41,8 +42,8 @@ class JiTPipeline(DiffusionPipeline):
     Parameters:
         transformer ([`JiTTransformer2DModel`]):
             A class-conditioned `JiTTransformer2DModel` to denoise the images.
-        scheduler ([`JiTScheduler`]):
-            Manual JiT flow-matching scheduler (linear `t in [0, 1]`, Heun or Euler).
+        scheduler ([`KarrasDiffusionSchedulers`] or [`FlowMatchHeunDiscreteScheduler`]):
+            Diffusers scheduler interface for JiT generation (defaults to `FlowMatchHeunDiscreteScheduler(shift=4.0)`).
         id2label (`dict[int, str]`, *optional*):
             ImageNet class id to English label mapping. Values may contain comma-separated synonyms.
     """
@@ -52,10 +53,11 @@ class JiTPipeline(DiffusionPipeline):
     def __init__(
         self,
         transformer,
-        scheduler,
+        scheduler: FlowMatchHeunDiscreteScheduler,
         id2label: Optional[Dict[Union[int, str], str]] = None,
     ):
         super().__init__()
+        scheduler = scheduler or FlowMatchHeunDiscreteScheduler(shift=4.0)
         self.register_modules(transformer=transformer, scheduler=scheduler)
 
         self._id2label = self._normalize_id2label(id2label)
@@ -148,103 +150,6 @@ class JiTPipeline(DiffusionPipeline):
 
         return list(class_labels)
 
-    def _predict_velocity(
-        self,
-        z_value: torch.Tensor,
-        t: torch.Tensor,
-        class_labels: torch.Tensor,
-        class_null: torch.Tensor,
-        do_classifier_free_guidance: bool,
-        guidance_scale: float,
-        guidance_interval_min: float,
-        guidance_interval_max: float,
-    ) -> torch.Tensor:
-        t = torch.as_tensor(t, device=z_value.device, dtype=z_value.dtype)
-        if do_classifier_free_guidance:
-            z_in = torch.cat([z_value, z_value], dim=0)
-            labels = torch.cat([class_labels, class_null], dim=0)
-        else:
-            z_in = z_value
-            labels = class_labels
-
-        t_batch = t.flatten().expand(z_in.shape[0])
-        x_pred = self.transformer(z_in, timestep=t_batch, class_labels=labels).sample
-        v = self.scheduler.velocity_from_prediction(z_in, x_pred, t)
-
-        if not do_classifier_free_guidance:
-            return v
-
-        v_cond, v_uncond = v.chunk(2, dim=0)
-        interval_mask = t < guidance_interval_max
-        if guidance_interval_min != 0.0:
-            interval_mask = interval_mask & (t > guidance_interval_min)
-        scale = torch.where(
-            interval_mask,
-            torch.tensor(guidance_scale, device=z_value.device, dtype=z_value.dtype),
-            torch.tensor(1.0, device=z_value.device, dtype=z_value.dtype),
-        )
-        return v_uncond + scale * (v_cond - v_uncond)
-
-    def _run_sampler(
-        self,
-        latents: torch.Tensor,
-        class_labels: torch.Tensor,
-        class_null: torch.Tensor,
-        num_inference_steps: int,
-        do_classifier_free_guidance: bool,
-        guidance_scale: float,
-        guidance_interval_min: float,
-        guidance_interval_max: float,
-        sampling_method: str,
-    ) -> torch.Tensor:
-        device = latents.device
-        self.scheduler.set_timesteps(num_inference_steps, device=device, solver=sampling_method)
-        timesteps = self.scheduler.timesteps
-
-        for i in self.progress_bar(range(num_inference_steps - 1)):
-            t = timesteps[i]
-            t_next = timesteps[i + 1]
-            v = self._predict_velocity(
-                latents,
-                t,
-                class_labels,
-                class_null,
-                do_classifier_free_guidance,
-                guidance_scale,
-                guidance_interval_min,
-                guidance_interval_max,
-            )
-
-            if sampling_method == "heun":
-                latents_euler = latents + (t_next - t) * v
-                v_next = self._predict_velocity(
-                    latents_euler,
-                    t_next,
-                    class_labels,
-                    class_null,
-                    do_classifier_free_guidance,
-                    guidance_scale,
-                    guidance_interval_min,
-                    guidance_interval_max,
-                )
-                latents = self.scheduler.step(v, t, latents, model_output_next=v_next).prev_sample
-            else:
-                latents = self.scheduler.step(v, t, latents).prev_sample
-
-        t = timesteps[-2]
-        t_next = timesteps[-1]
-        v = self._predict_velocity(
-            latents,
-            t,
-            class_labels,
-            class_null,
-            do_classifier_free_guidance,
-            guidance_scale,
-            guidance_interval_min,
-            guidance_interval_max,
-        )
-        return latents + (t_next - t) * v
-
     @torch.inference_mode()
     def __call__(
         self,
@@ -253,10 +158,12 @@ class JiTPipeline(DiffusionPipeline):
         guidance_interval_min: float = 0.1,
         guidance_interval_max: float = 1.0,
         noise_scale: Optional[float] = None,
-        t_eps: Optional[float] = None,
-        sampling_method: Optional[str] = None,
+        t_eps: float = 5e-2,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         num_inference_steps: int = 50,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        interpolate_pos_encoding: bool = True,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
     ) -> Union[ImagePipelineOutput, Tuple]:
@@ -274,10 +181,8 @@ class JiTPipeline(DiffusionPipeline):
                 Upper bound of the CFG interval in flow time.
             noise_scale (`float`, *optional*):
                 Initial Gaussian noise scale (`1.0` for 256px, `2.0` for 512px by default).
-            t_eps (`float`, *optional*):
-                Epsilon clamp for the `1 - t` denominator (scheduler config by default).
-            sampling_method (`str`, *optional*):
-                `"heun"` or `"euler"`. Defaults to the scheduler config (`heun`).
+            t_eps (`float`, defaults to `5e-2`):
+                Epsilon clamp for the `1 - t` denominator, matching JiT source defaults.
             generator (`torch.Generator`, *optional*):
                 RNG for reproducibility.
             num_inference_steps (`int`, defaults to `50`):
@@ -287,31 +192,34 @@ class JiTPipeline(DiffusionPipeline):
             return_dict (`bool`, *optional*, defaults to `True`):
                 Return [`ImagePipelineOutput`] if True.
         """
-        solver = sampling_method or self.scheduler.config.solver
-        if solver not in {"heun", "euler"}:
-            raise ValueError("sampling_method must be one of: 'heun', 'euler'.")
         if num_inference_steps < 2:
             raise ValueError("num_inference_steps must be >= 2.")
-
-        if t_eps is not None:
-            self.scheduler.register_to_config(t_eps=t_eps)
 
         class_label_ids = self._normalize_class_labels(class_labels)
         do_classifier_free_guidance = guidance_scale is not None and guidance_scale > 1.0
 
         batch_size = len(class_label_ids)
         image_size = int(self.transformer.config.sample_size)
+        patch_size = int(self.transformer.config.patch_size)
+        height = int(height or image_size)
+        width = int(width or image_size)
+        if height <= 0 or width <= 0:
+            raise ValueError("height and width must be positive integers.")
+        if height % patch_size != 0 or width % patch_size != 0:
+            raise ValueError(
+                f"height and width must be divisible by patch_size={patch_size}. Got {(height, width)}."
+            )
         channels = int(self.transformer.config.in_channels)
         null_class_val = int(self.transformer.config.num_classes)
 
         if guidance_scale is None:
             guidance_scale = 1.0
         if noise_scale is None:
-            noise_scale = RECOMMENDED_NOISE_BY_SIZE.get(image_size, 1.0)
+            noise_scale = RECOMMENDED_NOISE_BY_SIZE.get(max(height, width), 1.0)
 
         latents = (
             randn_tensor(
-                shape=(batch_size, channels, image_size, image_size),
+                shape=(batch_size, channels, height, width),
                 generator=generator,
                 device=self._execution_device,
                 dtype=self.transformer.dtype,
@@ -323,17 +231,47 @@ class JiTPipeline(DiffusionPipeline):
         class_labels_t = class_labels_t.clamp(0, null_class_val - 1)
         class_null = torch.full_like(class_labels_t, null_class_val)
 
-        latents = self._run_sampler(
-            latents,
-            class_labels_t,
-            class_null,
-            num_inference_steps,
-            do_classifier_free_guidance,
-            guidance_scale,
-            guidance_interval_min,
-            guidance_interval_max,
-            solver,
-        )
+        if do_classifier_free_guidance:
+            class_labels_input = torch.cat([class_labels_t, class_null], dim=0)
+        else:
+            class_labels_input = class_labels_t
+
+        self.scheduler.set_timesteps(num_inference_steps, device=self._execution_device)
+        for t in self.progress_bar(self.scheduler.timesteps):
+            step_index = self.scheduler.index_for_timestep(t, self.scheduler.timesteps)
+            sigma = self.scheduler.sigmas[step_index].to(device=latents.device, dtype=latents.dtype)
+            sigma = sigma.clamp_min(t_eps)
+            t_flow = (1.0 - sigma).clamp(0.0, 1.0)
+
+            if do_classifier_free_guidance:
+                latent_model_input = torch.cat([latents, latents], dim=0)
+            else:
+                latent_model_input = latents
+
+            timesteps = t_flow.flatten().expand(latent_model_input.shape[0])
+            x_pred = self.transformer(
+                latent_model_input,
+                timestep=timesteps,
+                class_labels=class_labels_input,
+                interpolate_pos_encoding=interpolate_pos_encoding,
+            ).sample
+
+            if do_classifier_free_guidance:
+                x_cond, x_uncond = x_pred.chunk(2, dim=0)
+                interval_mask = t_flow < guidance_interval_max
+                if guidance_interval_min != 0.0:
+                    interval_mask = interval_mask & (t_flow > guidance_interval_min)
+                scale = torch.where(
+                    interval_mask,
+                    torch.tensor(guidance_scale, device=latents.device, dtype=latents.dtype),
+                    torch.tensor(1.0, device=latents.device, dtype=latents.dtype),
+                )
+                x_pred = x_uncond + scale * (x_cond - x_uncond)
+
+            sigma = sigma.reshape(*([1] * (latents.ndim - 1)))
+            # JiT predicts x0; scheduler integrates in sigma space: dz/dsigma = -(x0 - z) / sigma.
+            model_output = -(x_pred - latents) / sigma
+            latents = self.scheduler.step(model_output, t, latents).prev_sample
 
         images_pt = ((latents.float().clamp(-1, 1) + 1.0) / 2.0).cpu()
         if output_type == "pt":

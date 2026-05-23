@@ -67,38 +67,58 @@ class JiTRotaryEmbedding(nn.Module):
         num_cls_token=0,
     ):
         super().__init__()
-        if custom_freqs is not None:
-            freqs = custom_freqs
-        else:
-            freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-
+        self.dim = dim
+        self.pt_seq_len = pt_seq_len
+        self.theta = theta
+        self.num_cls_token = num_cls_token
+        self.custom_freqs = custom_freqs
         if ft_seq_len is None:
             ft_seq_len = pt_seq_len
-        t = torch.arange(ft_seq_len) / ft_seq_len * pt_seq_len
+        self._cached_hw = None
+        cos, sin = self._build_freqs(ft_seq_len, ft_seq_len, device=torch.device("cpu"))
+        self.register_buffer("freqs_cos", cos, persistent=False)
+        self.register_buffer("freqs_sin", sin, persistent=False)
+        self._cached_hw = (ft_seq_len, ft_seq_len)
 
-        freqs = torch.einsum("..., f -> ... f", t, freqs)
-        freqs = freqs.repeat_interleave(2, dim=-1)
-        freqs = broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)
-
-        if num_cls_token > 0:
-            freqs_flat = freqs.view(-1, freqs.shape[-1])  # [N_img, D]
-            cos_img = freqs_flat.cos()
-            sin_img = freqs_flat.sin()
-
-            # prepend in-context cls token
-            _, D = cos_img.shape
-            cos_pad = torch.ones(num_cls_token, D, dtype=cos_img.dtype)
-            sin_pad = torch.zeros(num_cls_token, D, dtype=sin_img.dtype)
-
-            self.register_buffer("freqs_cos", torch.cat([cos_pad, cos_img], dim=0), persistent=False)
-            self.register_buffer("freqs_sin", torch.cat([sin_pad, sin_img], dim=0), persistent=False)
+    def _build_freqs(self, height, width, device):
+        if self.custom_freqs is not None:
+            freqs = self.custom_freqs.to(device=device, dtype=torch.float32)
         else:
-            self.register_buffer("freqs_cos", freqs.cos().view(-1, freqs.shape[-1]), persistent=False)
-            self.register_buffer("freqs_sin", freqs.sin().view(-1, freqs.shape[-1]), persistent=False)
+            freqs = 1.0 / (
+                self.theta ** (torch.arange(0, self.dim, 2, device=device, dtype=torch.float32)[: (self.dim // 2)] / self.dim)
+            )
 
-    def forward(self, t):
+        t_h = torch.arange(height, device=device, dtype=torch.float32) / height * self.pt_seq_len
+        t_w = torch.arange(width, device=device, dtype=torch.float32) / width * self.pt_seq_len
+        freqs_h = torch.einsum("..., f -> ... f", t_h, freqs).repeat_interleave(2, dim=-1)
+        freqs_w = torch.einsum("..., f -> ... f", t_w, freqs).repeat_interleave(2, dim=-1)
+        freqs_2d = broadcat((freqs_h[:, None, :], freqs_w[None, :, :]), dim=-1)
+        freqs_flat = freqs_2d.view(-1, freqs_2d.shape[-1])
+        cos_img = freqs_flat.cos()
+        sin_img = freqs_flat.sin()
+        if self.num_cls_token > 0:
+            _, dim_freq = cos_img.shape
+            cos_pad = torch.ones(self.num_cls_token, dim_freq, dtype=cos_img.dtype, device=device)
+            sin_pad = torch.zeros(self.num_cls_token, dim_freq, dtype=sin_img.dtype, device=device)
+            cos_img = torch.cat([cos_pad, cos_img], dim=0)
+            sin_img = torch.cat([sin_pad, sin_img], dim=0)
+        return cos_img, sin_img
+
+    def forward(self, t, height=None, width=None):
         # Applied on (batch, seq_len, heads, head_dim) tensors from attention.
         seq_len = t.shape[1]
+        if height is None or width is None:
+            image_tokens = seq_len - self.num_cls_token
+            size = int(image_tokens**0.5)
+            if size * size != image_tokens:
+                raise ValueError(
+                    f"Cannot infer square token grid from sequence length {seq_len} with {self.num_cls_token} class tokens."
+                )
+            height = size
+            width = size
+        if self._cached_hw != (height, width) or self.freqs_cos.device != t.device:
+            self.freqs_cos, self.freqs_sin = self._build_freqs(height, width, device=t.device)
+            self._cached_hw = (height, width)
         freqs_cos = self.freqs_cos[:seq_len].to(t.dtype)
         freqs_sin = self.freqs_sin[:seq_len].to(t.dtype)
 
@@ -194,7 +214,7 @@ class JiTAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, rope=None):
+    def forward(self, x, rope=None, grid_height=None, grid_width=None):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
@@ -205,8 +225,8 @@ class JiTAttention(nn.Module):
         if rope is not None:
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
-            q = rope(q)
-            k = rope(k)
+            q = rope(q, height=grid_height, width=grid_width)
+            k = rope(k, height=grid_height, width=grid_width)
             q = q.transpose(1, 2)
             k = k.transpose(1, 2)
 
@@ -253,7 +273,7 @@ class JiTBlock(nn.Module):
         self.act = nn.SiLU()
         self.adaLN_modulation = nn.Linear(hidden_size, 6 * hidden_size, bias=True)
 
-    def forward(self, x, c, feat_rope=None):
+    def forward(self, x, c, feat_rope=None, grid_height=None, grid_width=None):
         # Apply activation
         c = self.act(c)
 
@@ -262,7 +282,7 @@ class JiTBlock(nn.Module):
         # Attention block
         norm_x = self.norm1(x)
         modulated_x = modulate(norm_x, shift_msa, scale_msa)
-        attn_out = self.attn(modulated_x, rope=feat_rope)
+        attn_out = self.attn(modulated_x, rope=feat_rope, grid_height=grid_height, grid_width=grid_width)
         x = x + gate_msa.unsqueeze(1) * attn_out
 
         # MLP block
@@ -436,11 +456,30 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
         self.act_final = nn.SiLU()
         self.adaLN_modulation_final = nn.Linear(hidden_size, 2 * hidden_size, bias=True)
 
+    def _get_patch_grid(self, hidden_states):
+        height, width = hidden_states.shape[-2:]
+        if height % self.patch_size != 0 or width % self.patch_size != 0:
+            raise ValueError(
+                f"Input size {(height, width)} must be divisible by patch_size={self.patch_size}."
+            )
+        return height // self.patch_size, width // self.patch_size
+
+    def _interpolate_pos_encoding(self, tokens, grid_height, grid_width):
+        num_tokens = grid_height * grid_width
+        if self.pos_embed.shape[1] == num_tokens:
+            return self.pos_embed.to(device=tokens.device, dtype=tokens.dtype)
+        base_size = int(self.pos_embed.shape[1] ** 0.5)
+        pos_embed = self.pos_embed.reshape(1, base_size, base_size, self.hidden_size).permute(0, 3, 1, 2)
+        pos_embed = F.interpolate(pos_embed, size=(grid_height, grid_width), mode="bicubic", align_corners=False)
+        pos_embed = pos_embed.permute(0, 2, 3, 1).reshape(1, num_tokens, self.hidden_size)
+        return pos_embed.to(device=tokens.device, dtype=tokens.dtype)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         timestep: torch.LongTensor,
         class_labels: torch.LongTensor,
+        interpolate_pos_encoding: bool = True,
         return_dict: bool = True,
     ):
 
@@ -453,8 +492,19 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
         c = t_emb + y_emb
 
         # Patch Embed
+        grid_height, grid_width = self._get_patch_grid(hidden_states)
         x = self.x_embedder(hidden_states)
-        x = x + self.pos_embed.to(x.dtype)
+        if interpolate_pos_encoding:
+            pos_embed = self._interpolate_pos_encoding(x, grid_height, grid_width)
+        else:
+            expected_tokens = grid_height * grid_width
+            if self.pos_embed.shape[1] != expected_tokens:
+                raise ValueError(
+                    f"pos_embed token count {self.pos_embed.shape[1]} does not match input token count {expected_tokens}. "
+                    "Enable interpolate_pos_encoding for dynamic resolutions."
+                )
+            pos_embed = self.pos_embed.to(device=x.device, dtype=x.dtype)
+        x = x + pos_embed
 
         # Blocks
         for i, block in enumerate(self.blocks):
@@ -466,15 +516,23 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
             rope = self.feat_rope if i < self.in_context_start else self.feat_rope_incontext
 
             if self.training and self.gradient_checkpointing:
+                def custom_forward(current_x, current_c):
+                    return block(
+                        current_x,
+                        current_c,
+                        feat_rope=rope,
+                        grid_height=grid_height,
+                        grid_width=grid_width,
+                    )
+
                 x = torch.utils.checkpoint.checkpoint(
-                    block,
+                    custom_forward,
                     x,
                     c,
-                    rope,
                     use_reentrant=False,
                 )
             else:
-                x = block(x, c, feat_rope=rope)
+                x = block(x, c, feat_rope=rope, grid_height=grid_height, grid_width=grid_width)
 
         # Slice off in-context tokens
         if self.in_context_len > 0:
@@ -488,10 +546,11 @@ class JiTTransformer2DModel(ModelMixin, ConfigMixin):
         x = self.linear_final(x)
 
         # Unpatchify
-        h = w = int(x.shape[1] ** 0.5)
-        x = x.reshape(shape=(x.shape[0], h, w, self.patch_size, self.patch_size, self.out_channels))
+        x = x.reshape(shape=(x.shape[0], grid_height, grid_width, self.patch_size, self.patch_size, self.out_channels))
         x = torch.einsum("nhwpqc->nchpwq", x)
-        output = x.reshape(shape=(x.shape[0], self.out_channels, h * self.patch_size, w * self.patch_size))
+        output = x.reshape(
+            shape=(x.shape[0], self.out_channels, grid_height * self.patch_size, grid_width * self.patch_size)
+        )
 
         if not return_dict:
             return (output,)
