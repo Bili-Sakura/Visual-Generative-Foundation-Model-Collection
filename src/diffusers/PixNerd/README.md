@@ -6,12 +6,23 @@ Load checkpoints with **native Hugging Face diffusers** and this folder on the H
 import torch
 from diffusers import DiffusionPipeline
 
+model_dir = "models/BiliSakura/PixNerd-diffusers/PixNerd-XL-16-512"
+
 pipe = DiffusionPipeline.from_pretrained(
-    "BiliSakura/PixNerd-diffusers",
+    model_dir,
     trust_remote_code=True,
-    torch_dtype=torch.float16,
+    torch_dtype=torch.bfloat16,
 )
 pipe.to("cuda")
+
+print(pipe.get_label_ids("golden retriever"))
+image = pipe(
+    class_labels="golden retriever",
+    height=512,
+    width=512,
+    num_inference_steps=25,
+    guidance_scale=4.0,
+).images[0]
 ```
 
 ## Hub layout
@@ -19,10 +30,10 @@ pipe.to("cuda")
 | Path | Purpose |
 | --- | --- |
 | `pipeline.py` | `PixNerdPipeline` |
-| `transformer/` | transformer_pixnerd.py |
-| `scheduler/` | scheduling_flow_match_pixnerd.py |
-| `vae/` | autoencoder_pixel.py |
-| `conditioner/` | conditioner_pixnerd.py |
+| `transformer/` | `transformer_pixnerd.py` |
+| `scheduler/` | `scheduling_flow_match_pixnerd.py` + `scheduler_config.json` |
+| `vae/` | `autoencoder_pixel.py` |
+| `conditioner/` | `conditioner_pixnerd.py` |
 
 ## `model_index.json`
 

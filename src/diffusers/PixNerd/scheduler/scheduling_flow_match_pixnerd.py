@@ -10,12 +10,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from _hf_utils import get_hf_diffusers_attr
-
-ConfigMixin = get_hf_diffusers_attr("configuration_utils", "ConfigMixin")
-register_to_config = get_hf_diffusers_attr("configuration_utils", "register_to_config")
-SchedulerMixin = get_hf_diffusers_attr("schedulers.scheduling_utils", "SchedulerMixin")
-BaseOutput = get_hf_diffusers_attr("utils", "BaseOutput")
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.schedulers.scheduling_utils import SchedulerMixin
+from diffusers.utils import BaseOutput
 
 
 @dataclass
@@ -172,10 +169,14 @@ class PixNerdFlowMatchScheduler(SchedulerMixin, ConfigMixin):
             self.num_inference_steps = int(num_inference_steps)
         if timeshift is not None:
             self.timeshift = float(timeshift)
+        else:
+            self.timeshift = float(getattr(self.config, "timeshift", self.timeshift))
         if guidance_scale is not None:
             self.guidance_scale = float(guidance_scale)
         if order is not None:
             self.order = int(order)
+        else:
+            self.order = int(getattr(self.config, "order", self.order))
 
         timesteps, timedeltas, solver_coeffs = self._build_solver_state(
             self.num_inference_steps,

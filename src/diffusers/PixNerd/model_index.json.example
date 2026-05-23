@@ -4,25 +4,20 @@
     "PixNerdPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "scheduler": [
-    "scheduling_flow_match_pixnerd",
-    "PixNerdFlowMatchScheduler"
-  ],
   "vae": [
     "autoencoder_pixel",
     "PixNerdPixelVAE"
-  ],
-  "conditioner": [
-    "conditioner_pixnerd",
-    "PixNerdLabelConditioner"
   ],
   "transformer": [
     "transformer_pixnerd",
     "PixNerdTransformer2DModel"
   ],
-  "id2label": {
-    "0": "tench, Tinca tinca",
-    "1": "goldfish, Carassius auratus",
-    "207": "golden retriever"
-  }
+  "conditioner": [
+    "conditioner_pixnerd",
+    "PixNerdLabelConditioner"
+  ],
+  "scheduler": [
+    "scheduling_flow_match_pixnerd",
+    "PixNerdFlowMatchScheduler"
+  ]
 }

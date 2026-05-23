@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from torch.nn.functional import scaled_dot_product_attention
 
-from ._hf_utils import get_hf_diffusers_attr
+from ..._hf_utils import get_hf_diffusers_attr
 
 ConfigMixin = get_hf_diffusers_attr("configuration_utils", "ConfigMixin")
 register_to_config = get_hf_diffusers_attr("configuration_utils", "register_to_config")
@@ -78,6 +78,7 @@ class TimestepEmbedder(nn.Module):
 
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        t_freq = t_freq.to(dtype=self.mlp[0].weight.dtype)
         t_emb = self.mlp(t_freq)
         return t_emb
 
