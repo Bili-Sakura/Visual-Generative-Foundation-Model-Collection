@@ -22,7 +22,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import torch
 
@@ -45,8 +45,6 @@ class JiTPipeline(DiffusionPipeline):
             Manual JiT flow-matching scheduler (linear `t in [0, 1]`, Heun or Euler).
         id2label (`dict[int, str]`, *optional*):
             ImageNet class id to English label mapping. Values may contain comma-separated synonyms.
-        id2label_cn (`dict[int, str]`, *optional*):
-            ImageNet class id to Chinese label mapping. Values may contain comma-separated synonyms.
     """
 
     model_cpu_offload_seq = "transformer"
@@ -55,57 +53,43 @@ class JiTPipeline(DiffusionPipeline):
         self,
         transformer,
         scheduler,
-        id2label: Optional[Dict[int, str]] = None,
-        id2label_cn: Optional[Dict[int, str]] = None,
+        id2label: Optional[Dict[Union[int, str], str]] = None,
     ):
         super().__init__()
         self.register_modules(transformer=transformer, scheduler=scheduler)
 
-        self._id2label = id2label or {}
-        self._id2label_cn = id2label_cn or {}
+        self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
-        self.labels_cn = self._build_label2id(self._id2label_cn)
+        self._labels_loaded_from_model_index = bool(self._id2label)
 
     def _ensure_labels_loaded(self) -> None:
-        if self._id2label or self._id2label_cn:
+        if self._labels_loaded_from_model_index:
             return
-        loaded_en, loaded_cn = self._load_labels_for_variant(getattr(self.config, "_name_or_path", None))
-        if loaded_en:
-            self._id2label = loaded_en
+        loaded = self._read_id2label_from_model_index(getattr(self.config, "_name_or_path", None))
+        if loaded:
+            self._id2label = loaded
             self.labels = self._build_label2id(self._id2label)
-        if loaded_cn:
-            self._id2label_cn = loaded_cn
-            self.labels_cn = self._build_label2id(self._id2label_cn)
+        self._labels_loaded_from_model_index = True
 
     @staticmethod
-    def _labels_dir_for_variant(variant_path: Optional[str]) -> Optional[Path]:
+    def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
+        if not id2label:
+            return {}
+        return {int(key): value for key, value in id2label.items()}
+
+    @staticmethod
+    def _read_id2label_from_model_index(variant_path: Optional[str]) -> Dict[int, str]:
         if not variant_path:
-            return None
+            return {}
         variant_dir = Path(variant_path).resolve()
-        labels_dir = variant_dir.parent / "labels"
-        return labels_dir if labels_dir.is_dir() else None
-
-    @staticmethod
-    def _read_id2label(labels_dir: Path, lang: str = "en") -> Dict[int, str]:
-        filename = "id2label_en.json" if lang == "en" else "id2label_cn.json"
-        path = labels_dir / filename
-        if not path.exists():
-            raise FileNotFoundError(path)
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        return {int(key): value for key, value in raw.items()}
-
-    @classmethod
-    def _load_labels_for_variant(
-        cls,
-        variant_path: Optional[str],
-    ) -> Tuple[Optional[Dict[int, str]], Optional[Dict[int, str]]]:
-        labels_dir = cls._labels_dir_for_variant(variant_path)
-        if labels_dir is None:
-            return None, None
-        try:
-            return cls._read_id2label(labels_dir, "en"), cls._read_id2label(labels_dir, "cn")
-        except FileNotFoundError:
-            return None, None
+        model_index_path = variant_dir / "model_index.json"
+        if not model_index_path.exists():
+            return {}
+        raw = json.loads(model_index_path.read_text(encoding="utf-8"))
+        id2label = raw.get("id2label")
+        if not isinstance(id2label, dict):
+            return {}
+        return {int(key): value for key, value in id2label.items()}
 
     @staticmethod
     def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
@@ -123,31 +107,19 @@ class JiTPipeline(DiffusionPipeline):
         self._ensure_labels_loaded()
         return self._id2label
 
-    @property
-    def id2label_cn(self) -> Dict[int, str]:
-        """ImageNet class id to Chinese label string (comma-separated synonyms)."""
-        self._ensure_labels_loaded()
-        return self._id2label_cn
-
-    def get_label_ids(self, label: Union[str, List[str]], lang: str = "en") -> List[int]:
+    def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
         r"""
         Map ImageNet label strings to class ids.
 
         Args:
             label (`str` or `list[str]`):
-                One or more label strings. Each string must match a synonym in `id2label` (English)
-                or `id2label_cn` (Chinese).
-            lang (`str`, *optional*, defaults to `"en"`):
-                `"en"` uses English synonyms; `"cn"` uses Chinese synonyms.
+                One or more English label strings. Each string must match a synonym in `id2label`.
         """
-        if lang not in ("en", "cn"):
-            raise ValueError(f"`lang` must be 'en' or 'cn', got {lang!r}.")
-
         self._ensure_labels_loaded()
-        label2id = self.labels if lang == "en" else self.labels_cn
+        label2id = self.labels
         if not label2id:
             raise ValueError(
-                f"No {lang} labels loaded. Ensure `labels/id2label_{lang}.json` exists next to the variant folder."
+                "No English labels loaded. Ensure `id2label` exists in model_index.json."
             )
 
         if isinstance(label, str):
@@ -157,7 +129,7 @@ class JiTPipeline(DiffusionPipeline):
         if missing:
             preview = ", ".join(list(label2id.keys())[:8])
             raise ValueError(
-                f"Unknown label(s) for lang={lang!r}: {missing}. Example valid labels: {preview}, ..."
+                f"Unknown English label(s): {missing}. Example valid labels: {preview}, ..."
             )
         return [label2id[item] for item in label]
 
@@ -172,15 +144,7 @@ class JiTPipeline(DiffusionPipeline):
             return self.get_label_ids(class_labels)
 
         if class_labels and isinstance(class_labels[0], str):
-            self._ensure_labels_loaded()
-            if all(label in self.labels for label in class_labels):
-                return self.get_label_ids(class_labels, lang="en")
-            if all(label in self.labels_cn for label in class_labels):
-                return self.get_label_ids(class_labels, lang="cn")
-            raise ValueError(
-                "Could not resolve string `class_labels`. Use English synonyms from `pipe.labels` "
-                "or Chinese synonyms from `pipe.labels_cn`."
-            )
+            return self.get_label_ids(class_labels)
 
         return list(class_labels)
 
@@ -301,7 +265,7 @@ class JiTPipeline(DiffusionPipeline):
 
         Args:
             class_labels (`int`, `str`, `list[int]`, or `list[str]`):
-                ImageNet class indices or human-readable label strings (English or Chinese).
+                ImageNet class indices or human-readable English label strings.
             guidance_scale (`float`, *optional*):
                 Classifier-free guidance scale. CFG is active when `guidance_scale > 1.0`.
             guidance_interval_min (`float`, defaults to `0.1`):

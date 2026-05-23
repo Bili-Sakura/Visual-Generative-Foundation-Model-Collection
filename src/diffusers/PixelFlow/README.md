@@ -41,3 +41,5 @@ python scripts/convert_pixelflow_to_diffusers.py \
 ```
 
 Regenerate bundle: copy from `src/diffusers/PixelFlow/` during conversion.
+
+For class-conditional checkpoints, include full English `id2label` in `model_index.json` (DiT-style).

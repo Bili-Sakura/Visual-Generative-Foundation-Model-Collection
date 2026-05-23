@@ -10,7 +10,7 @@ import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -61,6 +61,7 @@ class PixelFlowPipeline(DiffusionPipeline):
             if subfolder:
                 variant = variant / subfolder
 
+        id2label_override = kwargs.pop("id2label", None)
         model_kwargs = dict(kwargs)
         inserted: List[str] = []
 
@@ -96,17 +97,76 @@ class PixelFlowPipeline(DiffusionPipeline):
             if transformer is None:
                 raise ValueError(f"No loadable transformer found under {variant}")
 
-            return cls(transformer=transformer, scheduler=scheduler)
+            model_index_path = variant / "model_index.json"
+            id2label = id2label_override or cls._read_id2label_from_model_index(model_index_path)
+            return cls(transformer=transformer, scheduler=scheduler, id2label=id2label)
         finally:
             for comp_path in inserted:
                 if comp_path in sys.path:
                     sys.path.remove(comp_path)
 
-    def __init__(self, transformer, scheduler):
+    def __init__(self, transformer, scheduler, id2label: Optional[Dict[Union[int, str], str]] = None):
         super().__init__()
         self.register_modules(transformer=transformer, scheduler=scheduler)
         self.image_processor = VaeImageProcessor(vae_scale_factor=1, do_normalize=False)
         self.class_cond = transformer.config.num_classes > 0
+        self._id2label = self._normalize_id2label(id2label)
+        self.labels = self._build_label2id(self._id2label)
+
+    @staticmethod
+    def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
+        if not id2label:
+            return {}
+        return {int(key): value for key, value in id2label.items()}
+
+    @staticmethod
+    def _read_id2label_from_model_index(model_index_path: Path) -> Dict[int, str]:
+        import json
+
+        if not model_index_path.exists():
+            return {}
+        raw = json.loads(model_index_path.read_text(encoding="utf-8"))
+        id2label = raw.get("id2label")
+        if not isinstance(id2label, dict):
+            return {}
+        return {int(key): value for key, value in id2label.items()}
+
+    @staticmethod
+    def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
+        label2id: Dict[str, int] = {}
+        for class_id, value in id2label.items():
+            for synonym in value.split(","):
+                synonym = synonym.strip()
+                if synonym:
+                    label2id[synonym] = int(class_id)
+        return dict(sorted(label2id.items()))
+
+    @property
+    def id2label(self) -> Dict[int, str]:
+        return self._id2label
+
+    def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
+        if isinstance(label, str):
+            label = [label]
+        if not self.labels:
+            raise ValueError("No English labels loaded. Ensure `id2label` exists in model_index.json.")
+        missing = [item for item in label if item not in self.labels]
+        if missing:
+            preview = ", ".join(list(self.labels.keys())[:8])
+            raise ValueError(f"Unknown English label(s): {missing}. Example valid labels: {preview}, ...")
+        return [self.labels[item] for item in label]
+
+    def _normalize_class_labels(
+        self,
+        class_labels: Optional[Union[int, str, List[Union[int, str]], torch.Tensor]],
+    ) -> Optional[Union[int, List[int], torch.Tensor]]:
+        if class_labels is None:
+            return None
+        if isinstance(class_labels, str):
+            return self.get_label_ids(class_labels)[0]
+        if isinstance(class_labels, list) and class_labels and isinstance(class_labels[0], str):
+            return self.get_label_ids(class_labels)
+        return class_labels
 
     def sample_block_noise(self, bs, ch, height, width, eps=1e-6):
         gamma = self.scheduler.gamma
@@ -139,7 +199,7 @@ class PixelFlowPipeline(DiffusionPipeline):
     @torch.no_grad()
     def __call__(
         self,
-        class_labels: Union[int, List[int], torch.Tensor],
+        class_labels: Union[int, str, List[Union[int, str]], torch.Tensor],
         height: Optional[int] = None,
         width: Optional[int] = None,
         num_inference_steps: Union[int, List[int]] = 10,
@@ -154,6 +214,7 @@ class PixelFlowPipeline(DiffusionPipeline):
         if width is None:
             width = int(self.transformer.config.sample_size)
 
+        class_labels = self._normalize_class_labels(class_labels)
         if isinstance(class_labels, int):
             class_labels = [class_labels]
         if not torch.is_tensor(class_labels):

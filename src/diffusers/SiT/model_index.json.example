@@ -15,5 +15,10 @@
   "transformer": [
     "transformer_sit",
     "SiTTransformer2DModel"
-  ]
+  ],
+  "id2label": {
+    "0": "tench, Tinca tinca",
+    "1": "goldfish, Carassius auratus",
+    "207": "golden retriever"
+  }
 }

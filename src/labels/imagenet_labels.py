@@ -1,4 +1,4 @@
-"""ImageNet-1k class labels for JiT class-conditional generation.
+"""ImageNet-1k class labels for ADM class-conditional generation.
 
 Labels are stored as Hugging Face-style ``id2label`` JSON maps (string keys ``"0"``–``"999"``).
 Each value is a comma-separated list of synonyms for that class id.

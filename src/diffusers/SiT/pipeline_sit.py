@@ -4,7 +4,7 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import torch
 
@@ -15,16 +15,58 @@ from diffusers.utils.torch_utils import randn_tensor
 class SiTPipeline(DiffusionPipeline):
     model_cpu_offload_seq = "transformer->vae"
 
-    def __init__(self, transformer, scheduler, vae):
+    def __init__(self, transformer, scheduler, vae, id2label: Optional[Dict[Union[int, str], str]] = None):
         super().__init__()
         self.register_modules(transformer=transformer, scheduler=scheduler, vae=vae)
         self.vae_scale_factor = 8
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+        self._id2label = self._normalize_id2label(id2label)
+        self.labels = self._build_label2id(self._id2label)
+
+    @staticmethod
+    def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
+        if not id2label:
+            return {}
+        return {int(key): value for key, value in id2label.items()}
+
+    @staticmethod
+    def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
+        label2id: Dict[str, int] = {}
+        for class_id, value in id2label.items():
+            for synonym in value.split(","):
+                synonym = synonym.strip()
+                if synonym:
+                    label2id[synonym] = int(class_id)
+        return dict(sorted(label2id.items()))
+
+    @property
+    def id2label(self) -> Dict[int, str]:
+        return self._id2label
+
+    def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
+        if isinstance(label, str):
+            label = [label]
+        if not self.labels:
+            raise ValueError("No English labels loaded. Ensure `id2label` exists in model_index.json.")
+        missing = [item for item in label if item not in self.labels]
+        if missing:
+            preview = ", ".join(list(self.labels.keys())[:8])
+            raise ValueError(f"Unknown English label(s): {missing}. Example valid labels: {preview}, ...")
+        return [self.labels[item] for item in label]
+
+    def _normalize_class_labels(self, class_labels: Union[int, str, List[Union[int, str]]]) -> List[int]:
+        if isinstance(class_labels, int):
+            return [class_labels]
+        if isinstance(class_labels, str):
+            return self.get_label_ids(class_labels)
+        if class_labels and isinstance(class_labels[0], str):
+            return self.get_label_ids(class_labels)
+        return list(class_labels)
 
     @torch.no_grad()
     def __call__(
         self,
-        class_labels: Union[int, List[int]] = 207,
+        class_labels: Union[int, str, List[Union[int, str]]] = 207,
         height: int = 256,
         width: int = 256,
         num_inference_steps: int = 250,
@@ -34,8 +76,7 @@ class SiTPipeline(DiffusionPipeline):
         return_dict: bool = True,
     ):
         device = self._execution_device
-        if isinstance(class_labels, int):
-            class_labels = [class_labels]
+        class_labels = self._normalize_class_labels(class_labels)
         batch_size = len(class_labels)
 
         latent_h = height // self.vae_scale_factor

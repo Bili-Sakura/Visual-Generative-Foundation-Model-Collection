@@ -14,11 +14,13 @@ from diffusers.utils.torch_utils import randn_tensor
 # you may not use this file except in compliance with the License.
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 
 from PIL import Image
+
+ConditioningInput = Union[str, int, Sequence[Union[str, int]]]
 
 @dataclass
 class PixNerdPipelineOutput(BaseOutput):
@@ -32,7 +34,7 @@ class PixNerdPipeline(DiffusionPipeline):
     model_cpu_offload_seq = "conditioner->transformer->vae"
     _callback_tensor_inputs = ["latents"]
 
-    def __init__(self, transformer, scheduler, vae=None, conditioner=None):
+    def __init__(self, transformer, scheduler, vae=None, conditioner=None, id2label: Optional[Dict[Union[int, str], str]] = None):
         super().__init__()
         if vae is None:
             vae = getattr(transformer, "vae", None)
@@ -47,6 +49,39 @@ class PixNerdPipeline(DiffusionPipeline):
             scheduler=scheduler,
         )
         self.image_processor = VaeImageProcessor(vae_scale_factor=1)
+        self._id2label = self._normalize_id2label(id2label)
+        self.labels = self._build_label2id(self._id2label)
+
+    @staticmethod
+    def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
+        if not id2label:
+            return {}
+        return {int(key): value for key, value in id2label.items()}
+
+    @staticmethod
+    def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
+        label2id: Dict[str, int] = {}
+        for class_id, value in id2label.items():
+            for synonym in value.split(","):
+                synonym = synonym.strip()
+                if synonym:
+                    label2id[synonym] = int(class_id)
+        return dict(sorted(label2id.items()))
+
+    @property
+    def id2label(self) -> Dict[int, str]:
+        return self._id2label
+
+    def get_label_ids(self, labels: Union[str, List[str]]) -> List[int]:
+        if isinstance(labels, str):
+            labels = [labels]
+        if not self.labels:
+            raise ValueError("No English labels loaded. Ensure `id2label` exists in model_index.json.")
+        missing = [label for label in labels if label not in self.labels]
+        if missing:
+            preview = ", ".join(list(self.labels.keys())[:8])
+            raise ValueError(f"Unknown English label(s): {missing}. Example valid labels: {preview}, ...")
+        return [self.labels[label] for label in labels]
 
     @staticmethod
     def _fp_to_uint8(image: torch.Tensor) -> torch.Tensor:
@@ -67,8 +102,21 @@ class PixNerdPipeline(DiffusionPipeline):
             expanded.extend([value] * repeats)
         return expanded
 
+    def _resolve_prompt_item(self, value: Union[str, int]) -> int:
+        if isinstance(value, int):
+            return value
+        if value.isdigit():
+            return int(value)
+        if value in self.labels:
+            return self.labels[value]
+        raise ValueError(f"Unknown class label {value!r}. Pass an ImageNet class id or a synonym from `pipe.labels`.")
+
+    def _resolve_prompts(self, prompts: List[Union[str, int]]) -> List[int]:
+        return [self._resolve_prompt_item(prompt) for prompt in prompts]
+
     def encode_prompt(self, prompt: ConditioningInput, num_images_per_prompt: int):
         prompts = self._repeat(self._to_list(prompt), num_images_per_prompt)
+        prompts = self._resolve_prompts(prompts)
         metadata = {"device": self._execution_device}
         with torch.no_grad():
             cond, uncond = self.conditioner(prompts, metadata)
@@ -122,6 +170,7 @@ class PixNerdPipeline(DiffusionPipeline):
         cond, default_uncond, prompts = self.encode_prompt(prompt, num_images_per_prompt)
         if negative_prompt is not None:
             negative = self._repeat(self._to_list(negative_prompt), num_images_per_prompt)
+            negative = self._resolve_prompts(negative)
             metadata = {"device": self._execution_device}
             with torch.no_grad():
                 _, uncond = self.conditioner(negative, metadata)
