@@ -31,6 +31,7 @@ LIB_TO_COMMUNITY: Dict[str, str] = {
     "DDT-diffusers": "DDT",
     "DeCo-diffusers": "DeCo",
     "DiT-diffusers": "DiT",
+    "DiT-MoE-diffusers": "DiT-MoE",
     "EDM2-diffusers": "EDM2",
     "FD-Loss-diffusers": "FD-Loss",
     "FiT-diffusers": "FiT",
@@ -200,7 +201,7 @@ def _collect_all_modules(src: Path) -> Dict[str, Path]:
             continue
         if any(rel.startswith(p) for p in SKIP_PATH_PREFIXES):
             continue
-        if rel in ("dependency.py", "_hf.py", "_hf_utils.py"):
+        if rel in ("dependency.py", "_hf.py", "_hf_utils.py", "_hf_diffusers.py"):
             continue
         collected[rel] = py
     return collected
@@ -557,6 +558,55 @@ Use `["_class_name"] = ["pipeline", "{model_index['_class_name'][1]}"]` and cust
 Regenerate: `python scripts/build_community_pipelines.py`
 """
     _write(out_dir / "README.md", readme)
+
+    if community == "DiT-MoE":
+        template_pipeline = lib_path / "templates" / "pipeline.py"
+        if template_pipeline.is_file():
+            hub_header = (
+                '"""Hub custom pipeline: DiTMoEPipeline.\n'
+                "Load with native Hugging Face diffusers and trust_remote_code=True.\n"
+                '"""\n\n'
+                "from __future__ import annotations\n\n"
+            )
+            body = _read(template_pipeline)
+            body = re.sub(r"^# Copyright.*?\n\n", "", body, count=1, flags=re.DOTALL)
+            pipe_text = hub_header + body.lstrip()
+            _write(out_dir / "pipeline.py", pipe_text)
+            _write(out_dir / "pipeline_dit_moe.py", pipe_text)
+        ddim_index = {
+            "_class_name": ["pipeline", "DiTMoEPipeline"],
+            "_diffusers_version": "0.36.0",
+            "scheduler": ["diffusers", "DDIMScheduler"],
+            "transformer": ["transformer_dit_moe", "DiTMoETransformer2DModel"],
+            "vae": ["diffusers", "AutoencoderKL"],
+            "id2label": {"0": "tench, Tinca tinca", "1": "goldfish, Carassius auratus", "207": "golden retriever"},
+        }
+        _write(out_dir / "model_index.json.example", json.dumps(ddim_index, indent=2) + "\n")
+        readme_extra = _read(out_dir / "README.md")
+        if "ImageNet class labels" not in readme_extra:
+            id2label_section = """
+## ImageNet class labels
+
+Each variant keeps an English `id2label` map in `model_index.json` (DiT-style).
+
+- `pipe.id2label` — id → English label (comma-separated synonyms)
+- `pipe.labels` — reverse map (synonym → id)
+- `pipe.get_label_ids("golden retriever")`
+- `pipe(class_labels="golden retriever", ...)`
+
+Copy the full 1000-class `id2label` block from `BiliSakura/DiT-diffusers` when publishing a model repo.
+
+"""
+            readme_extra = readme_extra.replace("## `model_index.json`", id2label_section + "## `model_index.json`")
+            readme_extra = readme_extra.replace(
+                "Use `[\"_class_name\"] = [\"pipeline\", \"DiTMoEPipeline\"]` and custom module stems for each component.",
+                "Use `[\"_class_name\"] = [\"pipeline\", \"DiTMoEPipeline\"]` and custom module stems for each component.\n\n"
+                "- DDIM (DiT-MoE-S/B): `\"scheduler\": [\"diffusers\", \"DDIMScheduler\"]`\n"
+                "- Rectified-flow (DiT-MoE-XL/G): `\"scheduler\": [\"scheduling_flow_match_dit_moe\", \"DiTMoEFlowMatchScheduler\"]`\n"
+                "- Always include `\"id2label\"` with all 1000 ImageNet classes",
+            )
+            _write(out_dir / "README.md", readme_extra)
+
     return report
 
 

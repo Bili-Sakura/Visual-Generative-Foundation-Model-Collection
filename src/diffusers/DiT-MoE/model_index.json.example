@@ -1,0 +1,24 @@
+{
+  "_class_name": [
+    "pipeline",
+    "DiTMoEPipeline"
+  ],
+  "_diffusers_version": "0.36.0",
+  "scheduler": [
+    "diffusers",
+    "DDIMScheduler"
+  ],
+  "transformer": [
+    "transformer_dit_moe",
+    "DiTMoETransformer2DModel"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "id2label": {
+    "0": "tench, Tinca tinca",
+    "1": "goldfish, Carassius auratus",
+    "207": "golden retriever"
+  }
+}

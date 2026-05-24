@@ -9,6 +9,7 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | ADM | [ADM/](ADM/) |
 | DDT | [DDT/](DDT/) |
 | DeCo | [DeCo/](DeCo/) |
+| DiT-MoE | [DiT-MoE/](DiT-MoE/) |
 | DiT | [DiT/](DiT/) |
 | EDM2 | [EDM2/](EDM2/) |
 | FD-Loss | [FD-Loss/](FD-Loss/) |
