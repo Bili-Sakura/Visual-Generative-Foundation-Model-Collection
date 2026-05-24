@@ -9,7 +9,7 @@ from diffusers import DiffusionPipeline
 pipe = DiffusionPipeline.from_pretrained(
     "BiliSakura/DiT-MoE-diffusers",
     trust_remote_code=True,
-    torch_dtype=torch.float16,
+    torch_dtype=torch.bfloat16,
 )
 pipe.to("cuda")
 ```
