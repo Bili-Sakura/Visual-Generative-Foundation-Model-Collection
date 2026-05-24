@@ -3,25 +3,37 @@
 Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub (or via `custom_pipeline`):
 
 ```python
+from pathlib import Path
 import torch
 from diffusers import DiffusionPipeline
 
+model_dir = Path("./FiTv1-XL-2-256")
 pipe = DiffusionPipeline.from_pretrained(
-    "BiliSakura/FiT-diffusers",
+    str(model_dir),
+    local_files_only=True,
+    custom_pipeline=str(model_dir / "pipeline.py"),
     trust_remote_code=True,
-    torch_dtype=torch.float16,
-)
-pipe.to("cuda")
+    torch_dtype=torch.float32,
+).to("cuda")
+
+image = pipe(
+    class_labels="golden retriever",
+    num_inference_steps=250,
+    guidance_scale=1.5,
+    generator=torch.Generator(device="cuda").manual_seed(42),
+).images[0]
 ```
 
-## Hub layout
+FiTv1 uses improved diffusion training with `DDPMScheduler` (`variance_type=learned_range`) at inference. FiTv2 uses flow matching (`use_sit=True`) with `time_shifting` in `[0, 1]`.
+
+## Hub layout (NiT-style: one Python file per component folder)
 
 | Path | Purpose |
 | --- | --- |
 | `pipeline.py` | `FiTPipeline` |
-| `transformer/` | eval_utils.py, lr_scheduler.py, sit_eval_utils.py, utils.py, fit_model_utils.py, fit_modules.py, … |
-| `scheduler/` | integrators.py, path.py, transport.py, utils.py, diffusion_utils.py, gaussian_diffusion.py, … |
-
+| `transformer/fit_transformer_2d.py` | bundled `FiTTransformer2DModel` |
+| `scheduler/scheduler_config.json` | built-in `DDPMScheduler` config (`learned_range`) |
+| `vae/` | `AutoencoderKL` weights |
 
 ## ImageNet class labels
 
@@ -32,15 +44,11 @@ Each variant keeps an English `id2label` map in `model_index.json` (DiT-style).
 - `pipe.get_label_ids("golden retriever")`
 - `pipe(class_labels="golden retriever", ...)`
 
-Copy the full 1000-class `id2label` block from `BiliSakura/DiT-diffusers` when publishing a model repo.
+Copy the full 1000-class `id2label` block from `BiliSakura/NiT-diffusers` when publishing a model repo.
 
 ## `model_index.json`
 
-Copy entries from `model_index.json.example` into your model repo after `save_pretrained`.
+Copy entries from `model_index.json.example` into your model repo after conversion.
 Use `["_class_name"] = ["pipeline", "FiTPipeline"]` and custom module stems for each component.
-
-- FiTv1 (improved diffusion): `"scheduler": ["fit_improved_sampler", "create_diffusion"]`
-- FiTv2 (rectified flow): use `FiTFlowPipeline` with flow-transport code under `scheduler/`
-- Always include `"id2label"` with all 1000 ImageNet classes
 
 Regenerate: `python scripts/build_community_pipelines.py`

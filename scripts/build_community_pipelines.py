@@ -18,6 +18,8 @@ import ast
 import json
 import re
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -484,12 +486,133 @@ def build_dit(out_dir: Path) -> BuildReport:
     return report
 
 
+def build_fit(out_dir: Path, lib_path: Path) -> BuildReport:
+    report = BuildReport(community="FiT")
+    bundle_script = lib_path / "scripts" / "bundle_fit_hub_modules.py"
+    subprocess.run([sys.executable, str(bundle_script)], check=True, cwd=lib_path)
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+
+    template_pipeline = lib_path / "templates" / "pipeline.py"
+    hub_header = (
+        '"""Hub custom pipeline: FiTPipeline.\n'
+        "Load with native Hugging Face diffusers and trust_remote_code=True.\n"
+        '"""\n\n'
+        "from __future__ import annotations\n\n"
+    )
+    body = _read(template_pipeline)
+    body = re.sub(r"^# Copyright.*?\n\n", "", body, count=1, flags=re.DOTALL)
+    pipe_text = hub_header + body.lstrip()
+    _write(out_dir / "pipeline.py", pipe_text)
+    _write(out_dir / "pipeline_fit.py", pipe_text)
+    report.hub_files.extend(["pipeline.py", "pipeline_fit.py"])
+
+    bundled_transformer = lib_path / "src/diffusers/models/transformers/fit_transformer_2d.py"
+    (out_dir / "transformer").mkdir(parents=True, exist_ok=True)
+    (out_dir / "scheduler").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(bundled_transformer, out_dir / "transformer/fit_transformer_2d.py")
+    report.hub_files.extend(["transformer/fit_transformer_2d.py"])
+
+    scheduler_config = {
+        "_class_name": "DDPMScheduler",
+        "_diffusers_version": "0.36.0",
+        "beta_end": 0.02,
+        "beta_schedule": "linear",
+        "beta_start": 0.0001,
+        "clip_sample": False,
+        "clip_sample_range": 1.0,
+        "num_train_timesteps": 1000,
+        "prediction_type": "epsilon",
+        "variance_type": "learned_range",
+        "timestep_spacing": "linspace",
+        "steps_offset": 0,
+        "trained_betas": None,
+    }
+    _write(out_dir / "scheduler/scheduler_config.json", json.dumps(scheduler_config, indent=2) + "\n")
+    report.hub_files.append("scheduler/scheduler_config.json")
+
+    fit_index = {
+        "_class_name": ["pipeline", "FiTPipeline"],
+        "_diffusers_version": "0.36.0",
+        "transformer": ["fit_transformer_2d", "FiTTransformer2DModel"],
+        "vae": ["diffusers", "AutoencoderKL"],
+        "scheduler": ["diffusers", "DDPMScheduler"],
+        "id2label": {"0": "tench, Tinca tinca", "1": "goldfish, Carassius auratus", "207": "golden retriever"},
+    }
+    _write(out_dir / "model_index.json.example", json.dumps(fit_index, indent=2) + "\n")
+    report.hub_files.append("model_index.json.example")
+
+    readme = """# FiT — Hub custom pipeline
+
+Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub (or via `custom_pipeline`):
+
+```python
+from pathlib import Path
+import torch
+from diffusers import DiffusionPipeline
+
+model_dir = Path("./FiTv1-XL-2-256")
+pipe = DiffusionPipeline.from_pretrained(
+    str(model_dir),
+    local_files_only=True,
+    custom_pipeline=str(model_dir / "pipeline.py"),
+    trust_remote_code=True,
+    torch_dtype=torch.float32,
+).to("cuda")
+
+image = pipe(
+    class_labels="golden retriever",
+    num_inference_steps=250,
+    guidance_scale=1.5,
+    generator=torch.Generator(device="cuda").manual_seed(42),
+).images[0]
+```
+
+FiTv1 uses improved diffusion training with `DDPMScheduler` (`variance_type=learned_range`) at inference. FiTv2 uses flow matching (`use_sit=True`) with `time_shifting` in `[0, 1]`.
+
+## Hub layout (NiT-style: one Python file per component folder)
+
+| Path | Purpose |
+| --- | --- |
+| `pipeline.py` | `FiTPipeline` |
+| `transformer/fit_transformer_2d.py` | bundled `FiTTransformer2DModel` |
+| `scheduler/scheduler_config.json` | built-in `DDPMScheduler` config (`learned_range`) |
+| `vae/` | `AutoencoderKL` weights |
+
+## ImageNet class labels
+
+Each variant keeps an English `id2label` map in `model_index.json` (DiT-style).
+
+- `pipe.id2label` — id → English label (comma-separated synonyms)
+- `pipe.labels` — reverse map (synonym → id)
+- `pipe.get_label_ids("golden retriever")`
+- `pipe(class_labels="golden retriever", ...)`
+
+Copy the full 1000-class `id2label` block from `BiliSakura/NiT-diffusers` when publishing a model repo.
+
+## `model_index.json`
+
+Copy entries from `model_index.json.example` into your model repo after conversion.
+Use `["_class_name"] = ["pipeline", "FiTPipeline"]` and custom module stems for each component.
+
+Regenerate: `python scripts/build_community_pipelines.py`
+"""
+    _write(out_dir / "README.md", readme)
+    report.hub_files.append("README.md")
+    return report
+
+
 def build_one(lib_name: str, community: str) -> BuildReport:
     report = BuildReport(community=community)
     if community == "DiT":
         return build_dit(OUT_ROOT / community)
 
     lib_path = LIBS_ROOT / lib_name
+    if community == "FiT":
+        return build_fit(OUT_ROOT / community, lib_path)
+
     src = lib_path / "src" / "diffusers"
     out_dir = OUT_ROOT / community
 
@@ -608,54 +731,6 @@ Copy the full 1000-class `id2label` block from `BiliSakura/DiT-diffusers` when p
                 "Use `[\"_class_name\"] = [\"pipeline\", \"DiTMoEPipeline\"]` and custom module stems for each component.\n\n"
                 "- DDIM (DiT-MoE-S/B): `\"scheduler\": [\"diffusers\", \"DDIMScheduler\"]`\n"
                 "- Rectified-flow (DiT-MoE-XL/G): `\"scheduler\": [\"scheduling_flow_match_dit_moe\", \"DiTMoEFlowMatchScheduler\"]`\n"
-                "- Always include `\"id2label\"` with all 1000 ImageNet classes",
-            )
-            _write(out_dir / "README.md", readme_extra)
-
-    if community == "FiT":
-        template_pipeline = lib_path / "templates" / "pipeline.py"
-        if template_pipeline.is_file():
-            hub_header = (
-                '"""Hub custom pipeline: FiTPipeline.\n'
-                "Load with native Hugging Face diffusers and trust_remote_code=True.\n"
-                '"""\n\n'
-                "from __future__ import annotations\n\n"
-            )
-            body = _read(template_pipeline)
-            body = re.sub(r"^# Copyright.*?\n\n", "", body, count=1, flags=re.DOTALL)
-            pipe_text = hub_header + body.lstrip()
-            _write(out_dir / "pipeline.py", pipe_text)
-            _write(out_dir / "pipeline_fit.py", pipe_text)
-        fit_index = {
-            "_class_name": ["pipeline", "FiTPipeline"],
-            "_diffusers_version": "0.36.0",
-            "scheduler": ["fit_improved_sampler", "create_diffusion"],
-            "transformer": ["transformer_fit", "FiTTransformer2DModel"],
-            "vae": ["diffusers", "AutoencoderKL"],
-            "id2label": {"0": "tench, Tinca tinca", "1": "goldfish, Carassius auratus", "207": "golden retriever"},
-        }
-        _write(out_dir / "model_index.json.example", json.dumps(fit_index, indent=2) + "\n")
-        readme_extra = _read(out_dir / "README.md")
-        if "ImageNet class labels" not in readme_extra:
-            id2label_section = """
-## ImageNet class labels
-
-Each variant keeps an English `id2label` map in `model_index.json` (DiT-style).
-
-- `pipe.id2label` — id → English label (comma-separated synonyms)
-- `pipe.labels` — reverse map (synonym → id)
-- `pipe.get_label_ids("golden retriever")`
-- `pipe(class_labels="golden retriever", ...)`
-
-Copy the full 1000-class `id2label` block from `BiliSakura/DiT-diffusers` when publishing a model repo.
-
-"""
-            readme_extra = readme_extra.replace("## `model_index.json`", id2label_section + "## `model_index.json`")
-            readme_extra = readme_extra.replace(
-                "Use `[\"_class_name\"] = [\"pipeline\", \"FiTPipeline\"]` and custom module stems for each component.",
-                "Use `[\"_class_name\"] = [\"pipeline\", \"FiTPipeline\"]` and custom module stems for each component.\n\n"
-                "- FiTv1 (improved diffusion): `\"scheduler\": [\"fit_improved_sampler\", \"create_diffusion\"]`\n"
-                "- FiTv2 (rectified flow): use `FiTFlowPipeline` with flow-transport code under `scheduler/`\n"
                 "- Always include `\"id2label\"` with all 1000 ImageNet classes",
             )
             _write(out_dir / "README.md", readme_extra)

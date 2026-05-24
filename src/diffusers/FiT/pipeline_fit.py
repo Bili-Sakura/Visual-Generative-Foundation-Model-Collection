@@ -5,17 +5,23 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import diffusers.schedulers as diffusers_schedulers
 import torch
+from huggingface_hub import snapshot_download
+
+from diffusers import AutoencoderKL
 from diffusers.image_processor import VaeImageProcessor
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.utils import BaseOutput, replace_example_docstring
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils.torch_utils import randn_tensor
+
+# Local component classes are loaded dynamically in from_pretrained.
 
 DEFAULT_NATIVE_RESOLUTION = 256
 
@@ -24,7 +30,7 @@ EXAMPLE_DOC_STRING = """
         ```py
         >>> from pathlib import Path
         >>> import torch
-        >>> from diffusers import DiffusionPipeline
+        >>> from diffusers import DiffusionPipeline, DDIMScheduler
 
         >>> model_dir = Path("./FiTv1-XL-2-256").resolve()
         >>> pipe = DiffusionPipeline.from_pretrained(
@@ -32,9 +38,10 @@ EXAMPLE_DOC_STRING = """
         ...     local_files_only=True,
         ...     custom_pipeline=str(model_dir / "pipeline.py"),
         ...     trust_remote_code=True,
-        ...     torch_dtype=torch.bfloat16,
+        ...     torch_dtype=torch.float32,
         ... )
         >>> pipe.to("cuda")
+        >>> pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
 
         >>> print(pipe.id2label[207])
         >>> print(pipe.get_label_ids("golden retriever"))
@@ -48,18 +55,14 @@ EXAMPLE_DOC_STRING = """
         ...     guidance_scale=1.5,
         ...     generator=generator,
         ... ).images[0]
+        >>> image.save("demo.png")
         ```
 """
 
 
-@dataclass
-class FiTPipelineOutput(BaseOutput):
-    images: Union[torch.FloatTensor, List]
-
-
 class FiTPipeline(DiffusionPipeline):
     r"""
-    Class-conditional FiTv1 pipeline using improved-diffusion sampling and an SD VAE decoder.
+    Pipeline for class-conditional image generation with FiTv1 (DDPM sampling).
     """
 
     model_cpu_offload_seq = "transformer->vae"
@@ -67,26 +70,15 @@ class FiTPipeline(DiffusionPipeline):
 
     def __init__(
         self,
-        transformer,
-        vae=None,
+        transformer: Any,
+        scheduler: KarrasDiffusionSchedulers,
+        vae: Any = None,
         id2label: Optional[Dict[Union[int, str], str]] = None,
         null_class_id: Optional[int] = None,
-        diffusion_config: Optional[Dict[str, object]] = None,
     ):
         super().__init__()
-        self.register_modules(transformer=transformer, vae=vae)
+        self.register_modules(transformer=transformer, scheduler=scheduler, vae=vae)
         self.image_processor = VaeImageProcessor()
-        if diffusion_config is None:
-            diffusion_config = {
-                "noise_schedule": "linear",
-                "use_kl": False,
-                "sigma_small": False,
-                "predict_xstart": False,
-                "learn_sigma": True,
-                "rescale_learned_sigmas": False,
-                "diffusion_steps": 1000,
-            }
-        self.register_to_config(diffusion_config=diffusion_config)
 
         if null_class_id is None:
             null_class_id = int(getattr(self.transformer.config, "num_classes", 1000))
@@ -94,6 +86,7 @@ class FiTPipeline(DiffusionPipeline):
 
         self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
+        self._labels_loaded_from_model_index = bool(self._id2label)
 
     @property
     def vae_scale_factor(self) -> int:
@@ -106,7 +99,7 @@ class FiTPipeline(DiffusionPipeline):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path=None, subfolder=None, **kwargs):
-        r"""Load a self-contained variant folder locally or from the Hub."""
+        """Load a self-contained variant folder locally or from the Hub."""
         repo_root = Path(__file__).resolve().parent
 
         if pretrained_model_name_or_path in (None, "", "."):
@@ -116,8 +109,6 @@ class FiTPipeline(DiffusionPipeline):
             and "/" in pretrained_model_name_or_path
             and not Path(pretrained_model_name_or_path).exists()
         ):
-            from huggingface_hub import snapshot_download
-
             hub_kwargs = dict(kwargs.pop("hub_kwargs", {}))
             if subfolder:
                 hub_kwargs.setdefault("allow_patterns", [f"{subfolder}/**"])
@@ -153,46 +144,27 @@ class FiTPipeline(DiffusionPipeline):
             return component_cls.from_pretrained(str(comp_dir), **model_kwargs)
 
         try:
-            transformer = _load_component("transformer", "transformer_fit", "FiTTransformer2DModel")
+            transformer = _load_component("transformer", "fit_transformer_2d", "FiTTransformer2DModel")
             if transformer is None:
                 raise ValueError(f"No loadable transformer found under {variant}")
+
+            scheduler = cls._load_scheduler_from_variant(variant, model_kwargs)
 
             vae = None
             vae_dir = variant / "vae"
             if vae_dir.exists() and (vae_dir / "config.json").exists():
-                from diffusers import AutoencoderKL
-
                 vae = AutoencoderKL.from_pretrained(str(vae_dir), **model_kwargs)
 
-            pipeline_config = cls._read_pipeline_config_from_model_index(str(variant))
-            scheduler_config_path = variant / "scheduler" / "scheduler_config.json"
-            diffusion_config = pipeline_config.get("diffusion_config")
-            if diffusion_config is None and scheduler_config_path.exists():
-                raw = json.loads(scheduler_config_path.read_text(encoding="utf-8"))
-                diffusion_config = {
-                    key: raw[key]
-                    for key in (
-                        "noise_schedule",
-                        "use_kl",
-                        "sigma_small",
-                        "predict_xstart",
-                        "learn_sigma",
-                        "rescale_learned_sigmas",
-                        "diffusion_steps",
-                    )
-                    if key in raw
-                }
-
-            id2label = id2label_override or pipeline_config.get("id2label")
-            null_class_id = null_class_id_override if null_class_id_override is not None else pipeline_config.get(
-                "null_class_id"
+            id2label = id2label_override or cls._read_id2label_from_model_index(str(variant))
+            null_class_id = null_class_id_override if null_class_id_override is not None else cls._read_null_class_id(
+                str(variant)
             )
             pipe = cls(
                 transformer=transformer,
+                scheduler=scheduler,
                 vae=vae,
                 id2label=id2label,
                 null_class_id=null_class_id,
-                diffusion_config=diffusion_config,
             )
             if hasattr(pipe, "register_to_config"):
                 pipe.register_to_config(_name_or_path=str(variant))
@@ -202,6 +174,50 @@ class FiTPipeline(DiffusionPipeline):
                 if comp_path in sys.path:
                     sys.path.remove(comp_path)
 
+    @classmethod
+    def _load_scheduler_from_variant(cls, variant: Path, model_kwargs: Dict[str, object]) -> KarrasDiffusionSchedulers:
+        scheduler_dir = variant / "scheduler"
+        config_path = scheduler_dir / "scheduler_config.json"
+        if not config_path.exists():
+            raise ValueError(f"No scheduler config found under {scheduler_dir}")
+
+        scheduler_entry = None
+        model_index_path = variant / "model_index.json"
+        if model_index_path.exists():
+            scheduler_entry = json.loads(model_index_path.read_text(encoding="utf-8")).get("scheduler")
+
+        if scheduler_entry is None:
+            class_name = json.loads(config_path.read_text(encoding="utf-8")).get("_class_name")
+            if not class_name:
+                raise ValueError(f"Missing `_class_name` in {config_path}")
+            scheduler_entry = ["diffusers", class_name]
+
+        if not isinstance(scheduler_entry, list) or len(scheduler_entry) != 2:
+            raise ValueError(f"Invalid scheduler entry in model_index.json: {scheduler_entry}")
+
+        library_name, class_name = scheduler_entry
+        if library_name != "diffusers":
+            raise ValueError(f"Unsupported scheduler library: {library_name}")
+
+        scheduler_cls = getattr(diffusers_schedulers, class_name)
+        return scheduler_cls.from_pretrained(str(scheduler_dir), **model_kwargs)
+
+    @staticmethod
+    def _prepare_model_output_for_scheduler(
+        model_out: torch.Tensor,
+        latent_channels: int,
+        scheduler: KarrasDiffusionSchedulers,
+    ) -> torch.Tensor:
+        if model_out.shape[1] != latent_channels * 2:
+            return model_out
+
+        variance_type = getattr(scheduler.config, "variance_type", None)
+        if scheduler.__class__.__name__ == "DDPMScheduler" and variance_type in ("learned", "learned_range"):
+            return model_out
+
+        model_output, _ = torch.split(model_out, latent_channels, dim=1)
+        return model_output
+
     @staticmethod
     def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
         if not id2label:
@@ -209,21 +225,29 @@ class FiTPipeline(DiffusionPipeline):
         return {int(key): value for key, value in id2label.items()}
 
     @staticmethod
-    def _read_pipeline_config_from_model_index(variant_path: Optional[str]) -> Dict[str, object]:
+    def _read_id2label_from_model_index(variant_path: Optional[str]) -> Dict[int, str]:
         if not variant_path:
             return {}
-        variant_dir = Path(variant_path).resolve()
-        model_index_path = variant_dir / "model_index.json"
+        model_index_path = Path(variant_path).resolve() / "model_index.json"
         if not model_index_path.exists():
             return {}
         raw = json.loads(model_index_path.read_text(encoding="utf-8"))
-        config: Dict[str, object] = {}
         id2label = raw.get("id2label")
-        if isinstance(id2label, dict):
-            config["id2label"] = {int(key): value for key, value in id2label.items()}
+        if not isinstance(id2label, dict):
+            return {}
+        return {int(key): value for key, value in id2label.items()}
+
+    @staticmethod
+    def _read_null_class_id(variant_path: Optional[str]) -> Optional[int]:
+        if not variant_path:
+            return None
+        model_index_path = Path(variant_path).resolve() / "model_index.json"
+        if not model_index_path.exists():
+            return None
+        raw = json.loads(model_index_path.read_text(encoding="utf-8"))
         if "null_class_id" in raw:
-            config["null_class_id"] = int(raw["null_class_id"])
-        return config
+            return int(raw["null_class_id"])
+        return None
 
     @staticmethod
     def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
@@ -237,10 +261,21 @@ class FiTPipeline(DiffusionPipeline):
 
     @property
     def id2label(self) -> Dict[int, str]:
+        self._ensure_labels_loaded()
         return self._id2label
+
+    def _ensure_labels_loaded(self) -> None:
+        if self._labels_loaded_from_model_index:
+            return
+        loaded = self._read_id2label_from_model_index(getattr(self.config, "_name_or_path", None))
+        if loaded:
+            self._id2label = loaded
+            self.labels = self._build_label2id(self._id2label)
+        self._labels_loaded_from_model_index = True
 
     def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
         labels = [label] if isinstance(label, str) else label
+        self._ensure_labels_loaded()
         if not self.labels:
             raise ValueError("No id2label mapping is available in this checkpoint.")
         missing = [item for item in labels if item not in self.labels]
@@ -266,41 +301,23 @@ class FiTPipeline(DiffusionPipeline):
         return [int(class_id) for class_id in class_labels]  # type: ignore[union-attr]
 
     @staticmethod
-    def _load_create_diffusion():
-        try:
-            from fit_improved_sampler import create_diffusion
-        except ImportError:
-            scheduler_dir = Path(__file__).resolve().parent / "scheduler"
-            scheduler_path = str(scheduler_dir)
-            if scheduler_path not in sys.path:
-                sys.path.insert(0, scheduler_path)
-            module = importlib.import_module("fit_improved_sampler")
-            return module.create_diffusion
-        return create_diffusion
-
-    def _build_diffusion(self, num_inference_steps: int):
-        create_diffusion = self._load_create_diffusion()
-        cfg = dict(self.config.diffusion_config)
-        cfg["timestep_respacing"] = str(num_inference_steps)
-        return create_diffusion(**cfg)
+    def prepare_extra_step_kwargs(
+        scheduler: KarrasDiffusionSchedulers,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        return kwargs
 
     @staticmethod
-    def _prepare_fit_inputs(
-        batch_size: int,
-        n_patch_h: int,
-        n_patch_w: int,
-        patch_size: int,
-        in_channels: int,
-        device: torch.device,
-        dtype: torch.dtype,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
-    ) -> torch.Tensor:
-        return randn_tensor(
-            (batch_size, (patch_size**2) * in_channels, n_patch_h * n_patch_w),
-            generator=generator,
-            device=device,
-            dtype=dtype,
-        )
+    def _expand_timestep(timestep, batch_size: int, device: torch.device) -> torch.Tensor:
+        if not torch.is_tensor(timestep):
+            timestep = torch.tensor([timestep], dtype=torch.long, device=device)
+        elif timestep.ndim == 0:
+            timestep = timestep[None].to(device=device)
+        return timestep.expand(batch_size)
 
     @staticmethod
     def _prepare_grid_mask_size(
@@ -319,7 +336,6 @@ class FiTPipeline(DiffusionPipeline):
         return grid, mask, size
 
     @torch.inference_mode()
-    @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
         class_labels: Union[int, str, List[Union[int, str]], torch.Tensor] = 207,
@@ -328,14 +344,14 @@ class FiTPipeline(DiffusionPipeline):
         num_inference_steps: int = 250,
         guidance_scale: float = 1.5,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        latents: Optional[torch.Tensor] = None,
         output_type: str = "pil",
         return_dict: bool = True,
-    ) -> Union[FiTPipelineOutput, Tuple]:
+    ) -> Union[ImagePipelineOutput, Tuple]:
         class_labels_list = self._normalize_class_labels(class_labels)
         batch_size = len(class_labels_list)
-        native_size = DEFAULT_NATIVE_RESOLUTION
-        height = native_size if height is None else int(height)
-        width = native_size if width is None else int(width)
+        height = DEFAULT_NATIVE_RESOLUTION if height is None else int(height)
+        width = DEFAULT_NATIVE_RESOLUTION if width is None else int(width)
 
         if height % self.vae_scale_factor != 0 or width % self.vae_scale_factor != 0:
             raise ValueError(
@@ -350,60 +366,84 @@ class FiTPipeline(DiffusionPipeline):
         latent_w = width // self.vae_scale_factor
         patch_size = int(self.transformer.config.patch_size)
         n_patch_h, n_patch_w = latent_h // patch_size, latent_w // patch_size
+        latent_channels = (patch_size**2) * int(self.transformer.in_channels)
 
-        z = self._prepare_fit_inputs(
-            batch_size,
-            n_patch_h,
-            n_patch_w,
-            patch_size,
-            int(self.transformer.in_channels),
-            device,
-            model_dtype,
-            generator,
-        )
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+        self.scheduler.set_timesteps(num_inference_steps, device=device)
+
+        if latents is None:
+            latents = randn_tensor(
+                (batch_size, latent_channels, n_patch_h * n_patch_w),
+                generator=generator,
+                device=device,
+                dtype=model_dtype,
+            )
+        else:
+            latents = latents.to(device=device, dtype=model_dtype)
+            expected = (batch_size, latent_channels, n_patch_h * n_patch_w)
+            if tuple(latents.shape) != expected:
+                raise ValueError(f"Invalid `latents` shape: {tuple(latents.shape)}. Expected {expected}.")
+
         grid, mask, size = self._prepare_grid_mask_size(batch_size, n_patch_h, n_patch_w, device, model_dtype)
         class_labels_tensor = torch.tensor(class_labels_list, device=device, dtype=torch.long)
 
         using_cfg = guidance_scale > 1.0
         if using_cfg:
-            z = torch.cat([z, z], dim=0)
             y_null = torch.full((batch_size,), int(self.config.null_class_id), device=device, dtype=torch.long)
             y = torch.cat([class_labels_tensor, y_null], dim=0)
             grid = torch.cat([grid, grid], dim=0)
             mask = torch.cat([mask, mask], dim=0)
             size = torch.cat([size, size], dim=0)
-            model_kwargs = dict(y=y, grid=grid, mask=mask, size=size, cfg_scale=guidance_scale)
-            sample_fn = self.transformer.forward_with_cfg
-        else:
-            model_kwargs = dict(y=class_labels_tensor, grid=grid, mask=mask, size=size)
-            sample_fn = self.transformer.forward
 
-        diffusion = self._build_diffusion(num_inference_steps)
-        samples = diffusion.p_sample_loop(
-            sample_fn,
-            z.shape,
-            z,
-            clip_denoised=False,
-            model_kwargs=model_kwargs,
-            progress=self.progress_bar is not None,
-            device=device,
-        )
-        if using_cfg:
-            samples, _ = samples.chunk(2, dim=0)
+        for timestep in self.progress_bar(self.scheduler.timesteps):
+            latent_model_input = latents
+            if using_cfg:
+                latent_model_input = torch.cat([latents, latents], dim=0)
 
-        samples = samples[..., : n_patch_h * n_patch_w]
-        samples = self.transformer.unpatchify(samples, (latent_h, latent_w))
+            timestep_tensor = self._expand_timestep(timestep, latent_model_input.shape[0], device)
+
+            if using_cfg:
+                model_out = self.transformer.forward_with_cfg(
+                    latent_model_input,
+                    timestep_tensor,
+                    y=y,
+                    grid=grid,
+                    mask=mask,
+                    size=size,
+                    cfg_scale=guidance_scale,
+                )
+                model_out = model_out.chunk(2, dim=0)[0]
+            else:
+                model_out = self.transformer(
+                    latents,
+                    timestep_tensor,
+                    y=class_labels_tensor,
+                    grid=grid,
+                    mask=mask,
+                    size=size,
+                )
+
+            model_output = self._prepare_model_output_for_scheduler(model_out, latent_channels, self.scheduler)
+
+            latents = self.scheduler.step(model_output, timestep, latents, **extra_step_kwargs).prev_sample
+
+        latents = latents[..., : n_patch_h * n_patch_w]
+        latents = self.transformer.unpatchify(latents, (latent_h, latent_w))
 
         if self.vae is not None:
-            samples = self.vae.decode(samples / self.vae.config.scaling_factor).sample
-            samples = self.image_processor.postprocess(samples, output_type=output_type)
-        elif output_type != "latent":
+            vae_dtype = next(self.vae.parameters()).dtype
+            latents = latents.to(dtype=vae_dtype)
+            latents = self.vae.decode(latents / self.vae.config.scaling_factor).sample
+            image = self.image_processor.postprocess(latents, output_type=output_type)
+        elif output_type == "latent":
+            image = latents
+        else:
             raise ValueError("Cannot decode latents without a VAE.")
 
         self.maybe_free_model_hooks()
         if not return_dict:
-            return (samples,)
-        return FiTPipelineOutput(images=samples)
+            return (image,)
+        return ImagePipelineOutput(images=image)
 
 
-__all__ = ["FiTPipeline", "FiTPipelineOutput"]
+__all__ = ["FiTPipeline"]

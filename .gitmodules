@@ -90,6 +90,10 @@
 	path = libs/SiT-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/SiT-diffusers
 
+[submodule "libs/Self-Flow-diffusers"]
+	path = libs/Self-Flow-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/Self-Flow-diffusers
+
 [submodule "libs/diffusers"]
 	path = libs/diffusers
 	url = https://ghfast.top/https://github.com/huggingface/diffusers

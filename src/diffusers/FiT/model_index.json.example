@@ -4,17 +4,17 @@
     "FiTPipeline"
   ],
   "_diffusers_version": "0.36.0",
-  "scheduler": [
-    "fit_improved_sampler",
-    "create_diffusion"
-  ],
   "transformer": [
-    "transformer_fit",
+    "fit_transformer_2d",
     "FiTTransformer2DModel"
   ],
   "vae": [
     "diffusers",
     "AutoencoderKL"
+  ],
+  "scheduler": [
+    "diffusers",
+    "DDPMScheduler"
   ],
   "id2label": {
     "0": "tench, Tinca tinca",
