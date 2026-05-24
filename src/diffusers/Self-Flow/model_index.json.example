@@ -1,0 +1,19 @@
+{
+  "_class_name": [
+    "pipeline",
+    "SelfFlowPipeline"
+  ],
+  "_diffusers_version": "0.36.0",
+  "transformer": [
+    "transformer_selfflow",
+    "SelfFlowTransformer2DModel"
+  ],
+  "scheduler": [
+    "scheduling_flow_match_selfflow",
+    "SelfFlowFlowMatchScheduler"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ]
+}

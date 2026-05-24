@@ -1,0 +1,13 @@
+{
+  "_class_name": "SelfFlowFlowMatchScheduler",
+  "_diffusers_version": "0.36.0",
+  "num_train_timesteps": 1000,
+  "path_type": "Linear",
+  "prediction": "velocity",
+  "sampling_method": "Euler",
+  "diffusion_form": "sigma",
+  "diffusion_norm": 1.0,
+  "last_step": "Euler",
+  "last_step_size": 0.04,
+  "reverse": true
+}

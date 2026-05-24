@@ -8,12 +8,12 @@
     "scheduling_flow_match_nit",
     "scheduling_flow_match_nit"
   ],
-  "vae": [
-    "diffusers",
-    "AutoencoderKL"
-  ],
   "transformer": [
     "transformer_nit",
     "NiTTransformer2DModel"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
   ]
 }

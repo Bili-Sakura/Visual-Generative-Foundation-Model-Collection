@@ -34,7 +34,7 @@ A selected collection of CORE visual generative foundation model including code,
 - [ ] RAE
 - [ ] RAEv2
 - [ ] REPA-E
-- [ ] Self-Flow
+- [x] Self-Flow
 
 _Update the checklist as new models are added or completed._
 
@@ -71,7 +71,6 @@ _Update the checklist as new models are added or completed._
 | NiT-XL | 675M | 119 | 2.03 | 265.26 |  |  | [![Official Code](https://img.shields.io/badge/Official%20Code-NiT-181717?logo=github)](https://github.com/WZDTHU/NiT) | [![Paper](https://img.shields.io/badge/Paper-NeurIPS%202025-B31B1B)](https://openreview.net/forum?id=QWQB1ReBkJ) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-NiT--diffusers-yellow&logo=huggingface)](https://huggingface.co/BiliSakura/NiT-diffusers) |
 | ProMoE-XL-Flow | 1.568B |  | 2.59 | 265.62 |  |  | [![Official Code](https://img.shields.io/badge/Official%20Code-ProMoE-181717?logo=github)](https://github.com/ali-vilab/ProMoE) | [![Paper](https://img.shields.io/badge/Paper-ICLR%202026-B31B1B)](https://openreview.net/forum?id=1w1jCfYM8P) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface)](https://huggingface.co/weilllllls/ProMoE) |
 | RAE, DiT-DH-XL/2 | 1254M | 146 | 1.13 | 262.6 |  |  | [![Official Code](https://img.shields.io/badge/Official%20Code-RAE-181717?logo=github)](https://github.com/bytetriper/RAE) | [![Paper](https://img.shields.io/badge/Paper-ICLR%202026-B31B1B)](https://openreview.net/forum?id=0u1LigJaab) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-TBD-yellow&logo=huggingface)](https://huggingface.co/collections/BiliSakura/visual-generation-models) |
-| RAE + Self-Flow |  |  | 2.95 | 222.34 | 0.84 | 0.56 | [![Official Code](https://img.shields.io/badge/Official%20Code-Self--Flow-181717?logo=github)](https://github.com/black-forest-labs/Self-Flow) | [![Paper](https://img.shields.io/badge/Paper-arXiv%202026-B31B1B)](https://arxiv.org/abs/2603.06507) | [![🤗 Model](https://img.shields.io/badge/🤗%20Model-Self--Flow--diffusers-yellow&logo=huggingface)](https://huggingface.co/BiliSakura/Self-Flow-diffusers) |
 
 ### ImageNet-512
 

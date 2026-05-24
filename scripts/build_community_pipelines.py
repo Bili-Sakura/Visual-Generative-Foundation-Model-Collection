@@ -47,6 +47,7 @@ LIB_TO_COMMUNITY: Dict[str, str] = {
     "RAE-diffusers": "RAE",
     "RAEv2-diffusers": "RAEv2",
     "REPA-E-diffusers": "REPA-E",
+    "Self-Flow-diffusers": "Self-Flow",
     "SiT-diffusers": "SiT",
 }
 
@@ -604,6 +605,215 @@ Regenerate: `python scripts/build_community_pipelines.py`
     return report
 
 
+def build_fiTv2(out_dir: Path, lib_path: Path) -> BuildReport:
+    report = BuildReport(community="FiTv2")
+    bundle_script = lib_path / "scripts" / "bundle_fit_hub_modules.py"
+    subprocess.run([sys.executable, str(bundle_script)], check=True, cwd=lib_path)
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+
+    template_pipeline = lib_path / "templates" / "pipeline_fiTv2.py"
+    shutil.copy2(template_pipeline, out_dir / "pipeline.py")
+    shutil.copy2(template_pipeline, out_dir / "pipeline_fitv2.py")
+    report.hub_files.extend(["pipeline.py", "pipeline_fitv2.py"])
+
+    bundled_transformer = lib_path / "src/diffusers/models/transformers/fit_transformer_2d.py"
+    (out_dir / "transformer").mkdir(parents=True, exist_ok=True)
+    (out_dir / "scheduler").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(bundled_transformer, out_dir / "transformer/fit_transformer_2d.py")
+    report.hub_files.extend(["transformer/fit_transformer_2d.py"])
+
+    scheduler_config = {
+        "_class_name": "FlowMatchEulerDiscreteScheduler",
+        "_diffusers_version": "0.36.0",
+        "num_train_timesteps": 1000,
+        "shift": 1.0,
+        "stochastic_sampling": False,
+    }
+    _write(out_dir / "scheduler/scheduler_config.json", json.dumps(scheduler_config, indent=2) + "\n")
+    report.hub_files.append("scheduler/scheduler_config.json")
+
+    fit_index = {
+        "_class_name": ["pipeline", "FiTv2Pipeline"],
+        "_diffusers_version": "0.36.0",
+        "transformer": ["fit_transformer_2d", "FiTTransformer2DModel"],
+        "vae": ["diffusers", "AutoencoderKL"],
+        "scheduler": ["diffusers", "FlowMatchEulerDiscreteScheduler"],
+        "sample_size": 256,
+        "id2label": {"0": "tench, Tinca tinca", "1": "goldfish, Carassius auratus", "207": "golden retriever"},
+    }
+    _write(out_dir / "model_index.json.example", json.dumps(fit_index, indent=2) + "\n")
+    report.hub_files.append("model_index.json.example")
+
+    readme = """# FiTv2 — Hub custom pipeline
+
+Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub (or via `custom_pipeline`):
+
+```python
+from pathlib import Path
+import torch
+from diffusers import DiffusionPipeline, FlowMatchEulerDiscreteScheduler
+
+model_dir = Path("./FiTv2-XL-2-256")
+pipe = DiffusionPipeline.from_pretrained(
+    str(model_dir),
+    local_files_only=True,
+    custom_pipeline=str(model_dir / "pipeline.py"),
+    trust_remote_code=True,
+    torch_dtype=torch.bfloat16,
+).to("cuda")
+pipe.scheduler = FlowMatchEulerDiscreteScheduler.from_config(pipe.scheduler.config)
+
+image = pipe(
+    class_labels="golden retriever",
+    num_inference_steps=250,
+    guidance_scale=1.5,
+    generator=torch.Generator(device="cuda").manual_seed(42),
+).images[0]
+```
+
+FiTv2 uses flow matching (`use_sit=True`) with `FlowMatchEulerDiscreteScheduler` and `time_shifting` in `[0, 1]`.
+
+## Hub layout (NiT-style: one Python file per component folder)
+
+| Path | Purpose |
+| --- | --- |
+| `pipeline.py` | `FiTv2Pipeline` |
+| `transformer/fit_transformer_2d.py` | bundled `FiTTransformer2DModel` (`use_sit=True`) |
+| `scheduler/scheduler_config.json` | built-in `FlowMatchEulerDiscreteScheduler` |
+| `vae/` | `AutoencoderKL` weights |
+
+## ImageNet class labels
+
+Each variant keeps an English `id2label` map in `model_index.json` (DiT-style).
+
+- `pipe.id2label` — id → English label (comma-separated synonyms)
+- `pipe.labels` — reverse map (synonym → id)
+- `pipe.get_label_ids("golden retriever")`
+- `pipe(class_labels="golden retriever", ...)`
+
+Copy the full 1000-class `id2label` block from `BiliSakura/NiT-diffusers` when publishing a model repo.
+
+## `model_index.json`
+
+Copy entries from `model_index.json.example` into your model repo after conversion.
+Use `["_class_name"] = ["pipeline", "FiTv2Pipeline"]` and custom module stems for each component.
+
+Regenerate: `python scripts/build_community_pipelines.py`
+"""
+    _write(out_dir / "README.md", readme)
+    report.hub_files.append("README.md")
+    return report
+
+
+def build_selfflow(out_dir: Path, lib_path: Path) -> BuildReport:
+    report = BuildReport(community="Self-Flow")
+    src = lib_path / "src" / "diffusers"
+    collected = _collect_all_modules(src)
+    hub_layout = _assign_hub_layout(collected)
+
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+
+    folder_stems = {f: _module_stems_in_folder(hub_layout, f) for f in {Path(k).parts[0] for k in hub_layout}}
+    for hub_rel, source in sorted(hub_layout.items()):
+        folder = Path(hub_rel).parts[0]
+        if hub_rel.startswith("support/_register_extensions.py"):
+            continue
+        text = _read(source)
+        text = _rewrite_component(text, folder, folder_stems.get(folder, set()))
+        _write(out_dir / hub_rel, text)
+        report.hub_files.append(hub_rel)
+
+    pipeline_src = lib_path / "templates" / "pipeline.py"
+    if not pipeline_src.is_file():
+        raise FileNotFoundError(f"Missing Self-Flow Hub template: {pipeline_src}")
+    pipe_text = _read(pipeline_src)
+    _write(out_dir / "pipeline.py", pipe_text)
+    _write(out_dir / "pipeline_selfflow.py", pipe_text)
+    report.hub_files.extend(["pipeline.py", "pipeline_selfflow.py"])
+
+    token_utils_src = src / "utils" / "token_utils.py"
+    shutil.copy2(token_utils_src, out_dir / "token_utils.py")
+    report.hub_files.append("token_utils.py")
+
+    model_index = {
+        "_class_name": ["pipeline", "SelfFlowPipeline"],
+        "_diffusers_version": "0.36.0",
+        "transformer": ["transformer_selfflow", "SelfFlowTransformer2DModel"],
+        "scheduler": ["scheduling_flow_match_selfflow", "SelfFlowFlowMatchScheduler"],
+        "vae": ["diffusers", "AutoencoderKL"],
+    }
+    _write(out_dir / "model_index.json.example", json.dumps(model_index, indent=2) + "\n")
+    report.hub_files.append("model_index.json.example")
+
+    scheduler_config = {
+        "_class_name": "SelfFlowFlowMatchScheduler",
+        "_diffusers_version": "0.36.0",
+        "num_train_timesteps": 1000,
+        "path_type": "Linear",
+        "prediction": "velocity",
+        "sampling_method": "Euler",
+        "diffusion_form": "sigma",
+        "diffusion_norm": 1.0,
+        "last_step": "Euler",
+        "last_step_size": 0.04,
+        "reverse": True,
+    }
+    _write(out_dir / "scheduler/scheduler_config.json", json.dumps(scheduler_config, indent=2) + "\n")
+    report.hub_files.append("scheduler/scheduler_config.json")
+
+    readme = """# Self-Flow — Hub custom pipeline
+
+Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub (or via `custom_pipeline`):
+
+```python
+from pathlib import Path
+import torch
+from diffusers import DiffusionPipeline
+
+model_dir = Path("./Self-Flow-XL-2-256").resolve()
+pipe = DiffusionPipeline.from_pretrained(
+    str(model_dir),
+    local_files_only=True,
+    custom_pipeline=str(model_dir / "pipeline.py"),
+    trust_remote_code=True,
+    torch_dtype=torch.bfloat16,
+)
+pipe.to("cuda")
+
+generator = torch.Generator(device="cuda").manual_seed(42)
+image = pipe(
+    class_labels=207,
+    num_inference_steps=250,
+    guidance_scale=3.5,
+    generator=generator,
+).images[0]
+image.save("demo.png")
+```
+
+## Hub layout
+
+| Path | Purpose |
+| --- | --- |
+| `pipeline.py` | `SelfFlowPipeline` |
+| `token_utils.py` | token packing helpers |
+| `transformer/` | `transformer_selfflow.py` + weights |
+| `scheduler/` | `SelfFlowFlowMatchScheduler` (SDE flow-matching) |
+
+Defaults: `num_inference_steps=250`, `guidance_scale=3.5`, `guidance_interval=(0.0, 0.7)`.
+Scheduler `last_step` must be `"Euler"` (not `"Mean"`).
+
+Regenerate: `python scripts/build_community_pipelines.py`
+"""
+    _write(out_dir / "README.md", readme)
+    report.hub_files.append("README.md")
+    return report
+
+
 def build_one(lib_name: str, community: str) -> BuildReport:
     report = BuildReport(community=community)
     if community == "DiT":
@@ -612,6 +822,8 @@ def build_one(lib_name: str, community: str) -> BuildReport:
     lib_path = LIBS_ROOT / lib_name
     if community == "FiT":
         return build_fit(OUT_ROOT / community, lib_path)
+    if community == "Self-Flow":
+        return build_selfflow(OUT_ROOT / community, lib_path)
 
     src = lib_path / "src" / "diffusers"
     out_dir = OUT_ROOT / community
@@ -786,6 +998,8 @@ def main() -> None:
     for lib_name, community in sorted(LIB_TO_COMMUNITY.items()):
         print(f"Building Hub bundle: {community}")
         reports.append(build_one(lib_name, community))
+    print("Building Hub bundle: FiTv2")
+    reports.append(build_fiTv2(OUT_ROOT / "FiTv2", LIBS_ROOT / "FiT-diffusers"))
     write_index(reports)
     write_conflicts_note()
     print(f"Done: {OUT_ROOT}")

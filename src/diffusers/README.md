@@ -24,5 +24,7 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | RAE | [RAE/](RAE/) |
 | RAEv2 | [RAEv2/](RAEv2/) |
 | REPA-E | [REPA-E/](REPA-E/) |
+| Self-Flow | [Self-Flow/](Self-Flow/) |
 | SiT | [SiT/](SiT/) |
+| FiTv2 | [FiTv2/](FiTv2/) |
 

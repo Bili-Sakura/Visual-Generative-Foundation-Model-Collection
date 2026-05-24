@@ -1,0 +1,25 @@
+{
+  "_class_name": [
+    "pipeline",
+    "FiTv2Pipeline"
+  ],
+  "_diffusers_version": "0.36.0",
+  "transformer": [
+    "fit_transformer_2d",
+    "FiTTransformer2DModel"
+  ],
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "scheduler": [
+    "diffusers",
+    "FlowMatchEulerDiscreteScheduler"
+  ],
+  "sample_size": 256,
+  "id2label": {
+    "0": "tench, Tinca tinca",
+    "1": "goldfish, Carassius auratus",
+    "207": "golden retriever"
+  }
+}
