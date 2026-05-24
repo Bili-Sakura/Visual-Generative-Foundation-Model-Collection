@@ -14,6 +14,18 @@
 	path = libs/DiT-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/DiT-diffusers
 
+[submodule "libs/DiT-MoE-diffusers"]
+	path = libs/DiT-MoE-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/DiT-MoE-diffusers
+
+[submodule "libs/DiM-diffusers"]
+	path = libs/DiM-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/DiM-diffusers
+
+[submodule "libs/Diffusion-RWKV-diffusers"]
+	path = libs/Diffusion-RWKV-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/Diffusion-RWKV-diffusers
+
 [submodule "libs/EDM2-diffusers"]
 	path = libs/EDM2-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/EDM2-diffusers
@@ -29,6 +41,10 @@
 [submodule "libs/JiT-diffusers"]
 	path = libs/JiT-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/JiT-diffusers
+
+[submodule "libs/LiT-diffusers"]
+	path = libs/LiT-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/LiT-diffusers
 
 [submodule "libs/LightningDiT-diffusers"]
 	path = libs/LightningDiT-diffusers
@@ -53,6 +69,10 @@
 [submodule "libs/PixNerd-diffusers"]
 	path = libs/PixNerd-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/PixNerd-diffusers
+
+[submodule "libs/ProMoE-diffusers"]
+	path = libs/ProMoE-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/ProMoE-diffusers
 
 [submodule "libs/RAE-diffusers"]
 	path = libs/RAE-diffusers
