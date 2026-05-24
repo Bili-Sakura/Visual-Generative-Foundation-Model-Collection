@@ -298,15 +298,21 @@ class SparseMoeBlock(nn.Module):
 class FlashSelfMHAModified(nn.Module):
     def __init__(self, dim: int, num_heads: int, qkv_bias: bool = True, qk_norm: bool = False):
         super().__init__()
-        if FlashSelfAttention is None:
-            raise ImportError("flash_attn is required when use_flash_attn=True.")
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.Wqkv = nn.Linear(dim, 3 * dim, bias=qkv_bias)
         self.q_norm = nn.LayerNorm(self.head_dim, elementwise_affine=True, eps=1e-6) if qk_norm else nn.Identity()
         self.k_norm = nn.LayerNorm(self.head_dim, elementwise_affine=True, eps=1e-6) if qk_norm else nn.Identity()
-        self.inner_attn = FlashSelfAttention(attention_dropout=0.0)
+        self.use_flash_kernel = (
+            FlashSelfAttention is not None
+            and torch.cuda.is_available()
+            and torch.cuda.get_device_capability()[0] >= 8
+        )
+        if self.use_flash_kernel:
+            self.inner_attn = FlashSelfAttention(attention_dropout=0.0)
+        else:
+            self.inner_attn = None
         self.out_proj = nn.Linear(dim, dim, bias=qkv_bias)
         self.proj_drop = nn.Dropout(0.0)
 
@@ -314,11 +320,23 @@ class FlashSelfMHAModified(nn.Module):
         batch_size, seq_len, dim = x.shape
         qkv = self.Wqkv(x).view(batch_size, seq_len, 3, self.num_heads, self.head_dim)
         query, key, value = qkv.unbind(dim=2)
-        query = self.q_norm(query).to(dtype=torch.float16)
-        key = self.k_norm(key).to(dtype=torch.float16)
-        qkv = torch.stack([query, key, value], dim=2)
-        context = self.inner_attn(qkv)
-        out = self.out_proj(context.view(batch_size, seq_len, dim))
+        query = self.q_norm(query)
+        key = self.k_norm(key)
+        if self.use_flash_kernel:
+            attn_dtype = torch.float16 if x.dtype == torch.float16 else torch.bfloat16
+            query = query.to(dtype=attn_dtype)
+            key = key.to(dtype=attn_dtype)
+            value = value.to(dtype=attn_dtype)
+            qkv = torch.stack([query, key, value], dim=2)
+            context = self.inner_attn(qkv)
+            context = context.view(batch_size, seq_len, dim)
+        else:
+            query = query.transpose(1, 2)
+            key = key.transpose(1, 2)
+            value = value.transpose(1, 2)
+            context = F.scaled_dot_product_attention(query, key, value)
+            context = context.transpose(1, 2).reshape(batch_size, seq_len, dim)
+        out = self.out_proj(context)
         return self.proj_drop(out)
 
 

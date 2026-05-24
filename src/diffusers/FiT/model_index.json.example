@@ -1,16 +1,24 @@
 {
   "_class_name": [
     "pipeline",
-    "FiTFlowPipeline"
+    "FiTPipeline"
   ],
-  "_diffusers_version": "0.31.0",
-  "vae": [
-    "diffusers",
-    "AutoencoderKL"
+  "_diffusers_version": "0.36.0",
+  "scheduler": [
+    "fit_improved_sampler",
+    "create_diffusion"
   ],
   "transformer": [
     "transformer_fit",
     "FiTTransformer2DModel"
   ],
-  "_note": "FiT stores Transport sample_fn on the pipeline; also ship rectified-flow code under scheduler/."
+  "vae": [
+    "diffusers",
+    "AutoencoderKL"
+  ],
+  "id2label": {
+    "0": "tench, Tinca tinca",
+    "1": "goldfish, Carassius auratus",
+    "207": "golden retriever"
+  }
 }

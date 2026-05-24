@@ -10,7 +10,10 @@ import numpy as np
 import torch as th
 import enum
 
-from diffusion_utils import discretized_gaussian_log_likelihood, normal_kl, get_flexible_mask_and_ratio
+try:
+    from diffusion_utils import discretized_gaussian_log_likelihood, normal_kl, get_flexible_mask_and_ratio
+except ImportError:
+    from diffusion_utils import discretized_gaussian_log_likelihood, normal_kl, get_flexible_mask_and_ratio
 
 
 def mean_flat(tensor):

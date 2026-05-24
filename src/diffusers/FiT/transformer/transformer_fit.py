@@ -9,7 +9,10 @@ from einops import rearrange
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
-from .utils_training.eval_utils import init_from_ckpt
+try:
+    from eval_utils import init_from_ckpt
+except ImportError:
+    from eval_utils import init_from_ckpt
 
 from fit_modules import FiTBlock, FinalLayer, LabelEmbedder, PatchEmbedder, TimestepEmbedder
 from rope import VisionRotaryEmbedding
