@@ -6,7 +6,7 @@
   "_diffusers_version": "0.31.0",
   "scheduler": [
     "scheduling_flow_match_nit",
-    "scheduling_flow_match_nit"
+    "NiTFlowMatchScheduler"
   ],
   "transformer": [
     "transformer_nit",
