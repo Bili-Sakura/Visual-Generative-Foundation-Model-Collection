@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from itertools import repeat
 from typing import Optional, Tuple, Union
 
+FeatureReturn = Tuple[torch.Tensor, Optional[torch.Tensor]]
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -66,6 +68,7 @@ to_2tuple = _ntuple(2)
 @dataclass
 class SelfFlowTransformer2DModelOutput(BaseOutput):
     sample: torch.FloatTensor
+    features: Optional[torch.FloatTensor] = None
 
 
 class PatchedPatchEmbed(nn.Module):
@@ -348,9 +351,13 @@ class SelfFlowTransformer2DModel(ModelMixin, ConfigMixin):
         hidden_states: torch.Tensor,
         timestep: torch.Tensor,
         class_labels: torch.Tensor,
-    ) -> torch.Tensor:
+        feature_layer: Optional[int] = None,
+        return_projected_features: bool = False,
+        return_raw_features: bool = False,
+    ) -> FeatureReturn:
         x = self.x_embedder(hidden_states) + self.pos_embed
         batch_size, seq_len, _ = x.shape
+        features = None
 
         if self.config.per_token_timestep:
             if timestep.ndim == 1:
@@ -362,17 +369,27 @@ class SelfFlowTransformer2DModel(ModelMixin, ConfigMixin):
                 raise ValueError(f"Timesteps must be 1D or 2D, got shape {timestep.shape}")
             y_emb = self.y_embedder(class_labels, self.training).unsqueeze(1).expand(-1, seq_len, -1)
             conditioning = t_emb + y_emb
-            for block in self.blocks:
+            for block_index, block in enumerate(self.blocks):
                 x = block(x, conditioning)
+                if feature_layer is not None and (block_index + 1) == feature_layer:
+                    if return_projected_features:
+                        features = self.projector(x)
+                    elif return_raw_features:
+                        features = x
             x = self.final_layer(x, conditioning)
         else:
             t_emb = self.t_embedder(timestep)
             y_emb = self.y_embedder(class_labels, self.training)
             conditioning = t_emb + y_emb
-            for block in self.blocks:
+            for block_index, block in enumerate(self.blocks):
                 x = block(x, conditioning)
+                if feature_layer is not None and (block_index + 1) == feature_layer:
+                    if return_projected_features:
+                        features = self.projector(x)
+                    elif return_raw_features:
+                        features = x
             x = self.final_layer(x, conditioning)
-        return x
+        return x, features
 
     def forward(
         self,
@@ -380,30 +397,53 @@ class SelfFlowTransformer2DModel(ModelMixin, ConfigMixin):
         timestep: Union[torch.Tensor, float],
         class_labels: torch.LongTensor,
         return_dict: bool = True,
-    ) -> Union[SelfFlowTransformer2DModelOutput, torch.Tensor]:
+        feature_layer: Optional[int] = None,
+        return_projected_features: bool = False,
+        return_raw_features: bool = False,
+        apply_output_sign_flip: bool = True,
+        remap_timestep: bool = True,
+    ) -> Union[SelfFlowTransformer2DModelOutput, torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor]]]:
         """
         Args:
             hidden_states: Token tensor `(batch, seq_len, patch_dim)` with `patch_dim = in_channels * patch_size^2`.
             timestep: Flow time in `[0, 1]` before the internal `1 - t` remap used at training time.
             class_labels: ImageNet class indices (use `num_classes` index for unconditional).
+            feature_layer: 1-based block index for intermediate features (Self-Flow training).
+            return_projected_features: Return projector head output at `feature_layer`.
+            return_raw_features: Return block activations at `feature_layer` (teacher path).
+            apply_output_sign_flip: Apply the legacy `-output` convention used at inference.
+            remap_timestep: Apply `1 - t` before embedding (disable only for advanced debugging).
         """
         if not torch.is_tensor(timestep):
             timestep = torch.tensor([timestep], device=hidden_states.device, dtype=hidden_states.dtype)
         timestep = timestep.to(device=hidden_states.device, dtype=hidden_states.dtype)
         if timestep.ndim == 1 and timestep.numel() == 1 and hidden_states.shape[0] > 1:
             timestep = timestep.expand(hidden_states.shape[0])
+        if timestep.ndim == 2 and timestep.shape[0] == 1 and hidden_states.shape[0] > 1:
+            timestep = timestep.expand(hidden_states.shape[0], -1)
 
-        # Match legacy inference convention: model expects noise decreasing from 1 -> 0.
-        timestep = 1 - timestep
+        if remap_timestep:
+            # Match legacy inference convention: model expects noise decreasing from 1 -> 0.
+            timestep = 1 - timestep
 
         class_labels = class_labels.to(device=hidden_states.device, dtype=torch.long).reshape(-1)
         if class_labels.numel() == 1 and hidden_states.shape[0] > 1:
             class_labels = class_labels.expand(hidden_states.shape[0])
 
-        sample = self._embed_forward(hidden_states, timestep, class_labels)
+        sample, features = self._embed_forward(
+            hidden_states,
+            timestep,
+            class_labels,
+            feature_layer=feature_layer,
+            return_projected_features=return_projected_features,
+            return_raw_features=return_raw_features,
+        )
         sample = self.shufflechannel(sample)
-        sample = -sample
+        if apply_output_sign_flip:
+            sample = -sample
 
+        if feature_layer is not None and not return_dict:
+            return sample, features
         if not return_dict:
             return sample
-        return SelfFlowTransformer2DModelOutput(sample=sample)
+        return SelfFlowTransformer2DModelOutput(sample=sample, features=features)
