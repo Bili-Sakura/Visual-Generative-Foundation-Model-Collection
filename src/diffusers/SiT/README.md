@@ -1,5 +1,33 @@
 # SiT — Hub custom pipeline
 
+## Training
+
+Flow-matching training uses the transport objective from [willisma/SiT](https://github.com/willisma/SiT), wrapped in an [Accelerate](https://huggingface.co/docs/accelerate) script modeled on `docs/train_unconditional.py`:
+
+```bash
+accelerate launch src/diffusers/SiT/train_sit.py \
+  --train_data_dir /path/to/imagenet/train \
+  --model SiT-XL/2 \
+  --image_size 256 \
+  --output_dir sit-output \
+  --train_batch_size 16 \
+  --allow_tf32
+```
+
+Key flags:
+
+| Flag | Description |
+| --- | --- |
+| `--model` | Architecture preset (`SiT-XL/2`, `SiT-L/2`, …) |
+| `--path-type` / `--prediction` | Transport path and target (`Linear`, `velocity`, …) |
+| `--vae_model` | Latent VAE (`stabilityai/sd-vae-ft-ema` by default) |
+| `--use_ema` | Export EMA weights under `ema/` |
+| `--sample_every` | Mid-training preview images via `SiTPipeline` |
+
+Transport code lives under `transport/`. Optional ODE preview sampling during training uses `torchdiffeq` (same as upstream SiT).
+
+## Inference
+
 Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub (or via `custom_pipeline`):
 
 ```python
