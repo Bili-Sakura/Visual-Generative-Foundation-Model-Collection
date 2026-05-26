@@ -523,6 +523,10 @@ class PixelFlowTransformer2DModel(ModelMixin, ConfigMixin):
         pos_embed: Optional[torch.Tensor] = None,
         encoder_hidden_states: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        cu_seqlens_k: Optional[torch.Tensor] = None,
+        seqlen_list_q: Optional[list] = None,
+        seqlen_list_k: Optional[list] = None,
         return_dict: bool = True,
     ) -> Union[PixelFlowTransformerOutput, Transformer2DModelOutput, Tuple[torch.Tensor, ...]]:
         output = self.model(
@@ -533,6 +537,10 @@ class PixelFlowTransformer2DModel(ModelMixin, ConfigMixin):
             latent_size=latent_size,
             encoder_attention_mask=encoder_attention_mask,
             pos_embed=pos_embed,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            seqlen_list_q=seqlen_list_q,
+            seqlen_list_k=seqlen_list_k,
         )
 
         if not return_dict:

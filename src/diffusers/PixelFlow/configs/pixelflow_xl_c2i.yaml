@@ -1,0 +1,29 @@
+model:
+  params:
+    num_attention_heads: 16
+    attention_head_dim: 72
+    in_channels: 3
+    out_channels: 3
+    depth: 28
+    num_classes: 1000
+    patch_size: 4
+    attention_bias: true
+
+scheduler:
+  num_train_timesteps: 1000
+  num_stages: 4
+
+train:
+  lr: 1.0e-4
+  weight_decay: 0.0
+  epochs: 10
+
+data:
+  root: /path/to/ILSVRC2012/train
+  center_crop: false
+  resolution: 256
+  expand_ratio: 1.125
+  num_workers: 4
+  batch_size: 4
+
+seed: 42

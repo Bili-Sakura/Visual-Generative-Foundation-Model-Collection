@@ -39,6 +39,38 @@ images = pipe(
 ).images
 ```
 
+## Training
+
+Class-conditional ImageNet training is adapted from the [official PixelFlow `train.py`](https://github.com/ShoufaChen/PixelFlow/blob/main/train.py) and follows the Accelerate layout in [`docs/train_unconditional.py`](../../../docs/train_unconditional.py).
+
+**Requirements:** `flash-attn` (varlen attention for packed multi-stage batches), ImageNet-1K in `ImageFolder` layout, and a CUDA GPU.
+
+```bash
+cd src/diffusers/PixelFlow
+
+# Optional: copy and edit the default XL config (data root, batch size, …)
+# configs/pixelflow_xl_c2i.yaml
+
+accelerate launch train_pixelflow.py \
+  --config configs/pixelflow_xl_c2i.yaml \
+  --train_data_dir /path/to/ILSVRC2012/train \
+  --output_dir ./pixelflow-xl-c2i \
+  --mixed_precision bf16 \
+  --checkpointing_steps 1000
+```
+
+Resume training:
+
+```bash
+accelerate launch train_pixelflow.py \
+  --config configs/pixelflow_xl_c2i.yaml \
+  --train_data_dir /path/to/ILSVRC2012/train \
+  --output_dir ./pixelflow-xl-c2i \
+  --resume_from_checkpoint latest
+```
+
+Checkpoints are written as Diffusers folders (`transformer/`, `scheduler/`, optional `transformer_ema/`). Load the EMA weights for evaluation when available.
+
 ## Conversion
 
 Regenerate converted checkpoints with:
