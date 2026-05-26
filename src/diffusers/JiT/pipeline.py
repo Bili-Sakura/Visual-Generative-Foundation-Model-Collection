@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers import FlowMatchHeunDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
 
 RECOMMENDED_NOISE_BY_SIZE = {
