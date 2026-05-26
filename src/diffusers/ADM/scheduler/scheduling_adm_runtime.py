@@ -41,10 +41,29 @@ class ModelVarType(enum.Enum):
     LEARNED_RANGE = enum.auto()
 
 
+class LossType(enum.Enum):
+    MSE = enum.auto()
+    RESCALED_MSE = enum.auto()
+    KL = enum.auto()
+    RESCALED_KL = enum.auto()
+
+    def is_vb(self):
+        return self == LossType.KL or self == LossType.RESCALED_KL
+
+
 class GaussianDiffusion:
-    def __init__(self, *, betas, model_mean_type, model_var_type, rescale_timesteps: bool = False):
+    def __init__(
+        self,
+        *,
+        betas,
+        model_mean_type,
+        model_var_type,
+        loss_type=LossType.MSE,
+        rescale_timesteps: bool = False,
+    ):
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
+        self.loss_type = loss_type
         self.rescale_timesteps = rescale_timesteps
         betas = np.array(betas, dtype=np.float64)
         self.betas = betas
@@ -53,8 +72,10 @@ class GaussianDiffusion:
         alphas = 1.0 - betas
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
+        self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:], 0.0)
         self.sqrt_alphas_cumprod = np.sqrt(self.alphas_cumprod)
         self.sqrt_one_minus_alphas_cumprod = np.sqrt(1.0 - self.alphas_cumprod)
+        self.log_one_minus_alphas_cumprod = np.log(1.0 - self.alphas_cumprod)
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
         self.posterior_variance = betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
@@ -82,6 +103,21 @@ class GaussianDiffusion:
             self.posterior_mean_coef2 / self.posterior_mean_coef1, t, x_t.shape
         ) * x_t
 
+    def q_mean_variance(self, x_start, t):
+        mean = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
+        variance = _extract_into_tensor(1.0 - self.alphas_cumprod, t, x_start.shape)
+        log_variance = _extract_into_tensor(self.log_one_minus_alphas_cumprod, t, x_start.shape)
+        return mean, variance, log_variance
+
+    def q_sample(self, x_start, t, noise=None):
+        if noise is None:
+            noise = torch.randn_like(x_start)
+        assert noise.shape == x_start.shape
+        return (
+            _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
+            + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+        )
+
     def q_posterior_mean_variance(self, x_start, x_t, t):
         posterior_mean = _extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape) * x_start + _extract_into_tensor(
             self.posterior_mean_coef2, t, x_t.shape
@@ -95,13 +131,18 @@ class GaussianDiffusion:
         b, c = x.shape[:2]
         model_output = model(x, self._scale_timesteps(t), **model_kwargs)
 
-        if self.model_var_type == ModelVarType.LEARNED_RANGE:
+        if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
+            assert model_output.shape == (b, c * 2, *x.shape[2:])
             model_output, model_var_values = torch.split(model_output, c, dim=1)
-            min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
-            max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
-            frac = (model_var_values + 1) / 2
-            model_log_variance = frac * max_log + (1 - frac) * min_log
-            model_variance = torch.exp(model_log_variance)
+            if self.model_var_type == ModelVarType.LEARNED:
+                model_log_variance = model_var_values
+                model_variance = torch.exp(model_log_variance)
+            else:
+                min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
+                max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
+                frac = (model_var_values + 1) / 2
+                model_log_variance = frac * max_log + (1 - frac) * min_log
+                model_variance = torch.exp(model_log_variance)
         else:
             model_variance, model_log_variance = {
                 ModelVarType.FIXED_LARGE: (
@@ -123,6 +164,75 @@ class GaussianDiffusion:
             pred_xstart = pred_xstart.clamp(-1, 1)
         model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
         return {"mean": model_mean, "variance": model_variance, "log_variance": model_log_variance, "pred_xstart": pred_xstart}
+
+    def _vb_terms_bpd(self, model, x_start, x_t, t, clip_denoised=True, model_kwargs=None):
+        from adm_losses import discretized_gaussian_log_likelihood, mean_flat, normal_kl
+
+        true_mean, _, true_log_variance_clipped = self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)
+        out = self.p_mean_variance(model, x_t, t, clip_denoised=clip_denoised, model_kwargs=model_kwargs)
+        kl = normal_kl(true_mean, true_log_variance_clipped, out["mean"], out["log_variance"])
+        kl = mean_flat(kl) / np.log(2.0)
+
+        decoder_nll = -discretized_gaussian_log_likelihood(
+            x_start, means=out["mean"], log_scales=0.5 * out["log_variance"]
+        )
+        decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
+
+        output = torch.where((t == 0), decoder_nll, kl)
+        return {"output": output, "pred_xstart": out["pred_xstart"]}
+
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
+        from adm_losses import mean_flat
+
+        if model_kwargs is None:
+            model_kwargs = {}
+        if noise is None:
+            noise = torch.randn_like(x_start)
+        x_t = self.q_sample(x_start, t, noise=noise)
+
+        terms = {}
+
+        if self.loss_type.is_vb():
+            terms["loss"] = self._vb_terms_bpd(
+                model=model,
+                x_start=x_start,
+                x_t=x_t,
+                t=t,
+                clip_denoised=False,
+                model_kwargs=model_kwargs,
+            )["output"]
+            if self.loss_type == LossType.RESCALED_KL:
+                terms["loss"] *= self.num_timesteps
+        elif self.loss_type in [LossType.MSE, LossType.RESCALED_MSE]:
+            model_output = model(x_t, self._scale_timesteps(t), **model_kwargs)
+
+            if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
+                b, c = x_t.shape[:2]
+                assert model_output.shape == (b, c * 2, *x_t.shape[2:])
+                model_output, model_var_values = torch.split(model_output, c, dim=1)
+                frozen_out = torch.cat([model_output.detach(), model_var_values], dim=1)
+                terms["vb"] = self._vb_terms_bpd(
+                    model=lambda *args, r=frozen_out: r,
+                    x_start=x_start,
+                    x_t=x_t,
+                    t=t,
+                    clip_denoised=False,
+                )["output"]
+                if self.loss_type == LossType.RESCALED_MSE:
+                    terms["vb"] *= self.num_timesteps / 1000.0
+
+            target = {
+                ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)[0],
+                ModelMeanType.START_X: x_start,
+                ModelMeanType.EPSILON: noise,
+            }[self.model_mean_type]
+            assert model_output.shape == target.shape == x_start.shape
+            terms["mse"] = mean_flat((target - model_output) ** 2)
+            terms["loss"] = terms["mse"] + terms["vb"] if "vb" in terms else terms["mse"]
+        else:
+            raise NotImplementedError(self.loss_type)
+
+        return terms
 
     def p_sample(self, model, x, t, clip_denoised=True, model_kwargs=None):
         out = self.p_mean_variance(model, x, t, clip_denoised=clip_denoised, model_kwargs=model_kwargs)
@@ -240,6 +350,9 @@ class SpacedDiffusion(GaussianDiffusion):
     def p_mean_variance(self, model, *args, **kwargs):
         return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
 
+    def training_losses(self, model, *args, **kwargs):
+        return super().training_losses(self._wrap_model(model), *args, **kwargs)
+
     def _wrap_model(self, model):
         if isinstance(model, _WrappedModel):
             return model
@@ -282,10 +395,18 @@ def create_adm_diffusion_runtime(
     sigma_small=False,
     noise_schedule="linear",
     predict_xstart=False,
+    use_kl=False,
+    rescale_learned_sigmas=False,
     rescale_timesteps=False,
     timestep_respacing="",
 ):
     betas = get_named_beta_schedule(noise_schedule, steps)
+    if use_kl:
+        loss_type = LossType.RESCALED_KL
+    elif rescale_learned_sigmas:
+        loss_type = LossType.RESCALED_MSE
+    else:
+        loss_type = LossType.MSE
     if not timestep_respacing:
         timestep_respacing = [steps]
     return SpacedDiffusion(
@@ -295,7 +416,33 @@ def create_adm_diffusion_runtime(
         model_var_type=(ModelVarType.FIXED_LARGE if not sigma_small else ModelVarType.FIXED_SMALL)
         if not learn_sigma
         else ModelVarType.LEARNED_RANGE,
+        loss_type=loss_type,
         rescale_timesteps=rescale_timesteps,
+    )
+
+
+def create_adm_training_diffusion(
+    *,
+    steps=1000,
+    learn_sigma=False,
+    sigma_small=False,
+    noise_schedule="linear",
+    predict_xstart=False,
+    use_kl=False,
+    rescale_learned_sigmas=False,
+    rescale_timesteps=False,
+):
+    """Full-timestep diffusion object for training (no inference respacing)."""
+    return create_adm_diffusion_runtime(
+        steps=steps,
+        learn_sigma=learn_sigma,
+        sigma_small=sigma_small,
+        noise_schedule=noise_schedule,
+        predict_xstart=predict_xstart,
+        use_kl=use_kl,
+        rescale_learned_sigmas=rescale_learned_sigmas,
+        rescale_timesteps=rescale_timesteps,
+        timestep_respacing="",
     )
 
 
