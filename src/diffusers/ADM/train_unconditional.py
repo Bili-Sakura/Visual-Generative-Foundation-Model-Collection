@@ -20,7 +20,6 @@ from pathlib import Path
 
 import accelerate
 import datasets
-import numpy as np
 import torch
 from accelerate import Accelerator, InitProcessGroupKwargs
 from accelerate.logging import get_logger
@@ -28,7 +27,6 @@ from accelerate.utils import ProjectConfiguration
 from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
-from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 
