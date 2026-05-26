@@ -470,20 +470,36 @@ def _infer_model_index(pipeline_text: str, hub_layout: Dict[str, Path]) -> dict:
 
 def build_dit(out_dir: Path) -> BuildReport:
     report = BuildReport(community="DiT")
+    preserved: Dict[str, str] = {}
+    preserve_paths = [
+        "train_dit.py",
+        "support/__init__.py",
+        "support/dit_diffusion_loss.py",
+    ]
     if out_dir.exists():
+        for rel in preserve_paths:
+            path = out_dir / rel
+            if path.exists():
+                preserved[rel] = _read(path)
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
     _write(out_dir / "pipeline.py", DIT_PIPELINE)
     _write(out_dir / "pipeline_dit.py", DIT_PIPELINE)
     _write(out_dir / "model_index.json.example", json.dumps(DIT_MODEL_INDEX, indent=2) + "\n")
-    _write(
-        out_dir / "README.md",
-        "# DiT (native Hugging Face)\n\n"
-        "Use upstream `diffusers.DiTPipeline` — no custom Hub Python is required.\n\n"
-        "```python\nfrom diffusers import DiTPipeline\n"
-        "pipe = DiTPipeline.from_pretrained('facebook/DiT-XL-2-256')\n```\n",
-    )
-    report.hub_files = ["pipeline.py", "model_index.json.example"]
+    readme_path = REPO_ROOT / "src" / "diffusers" / "DiT" / "README.md"
+    if readme_path.exists():
+        _write(out_dir / "README.md", _read(readme_path))
+    else:
+        _write(
+            out_dir / "README.md",
+            "# DiT (native Hugging Face)\n\n"
+            "Use upstream `diffusers.DiTPipeline` — no custom Hub Python is required.\n\n"
+            "```python\nfrom diffusers import DiTPipeline\n"
+            "pipe = DiTPipeline.from_pretrained('facebook/DiT-XL-2-256')\n```\n",
+        )
+    for rel, content in preserved.items():
+        _write(out_dir / rel, content)
+    report.hub_files = ["pipeline.py", "model_index.json.example", *preserved.keys()]
     return report
 
 
