@@ -19,7 +19,7 @@ pipe.to("cuda")
 
 generator = torch.Generator(device="cuda").manual_seed(42)
 image = pipe(
-    class_labels="golden retriever",
+    class_labels=207,
     num_inference_steps=250,
     guidance_scale=3.5,
     generator=generator,

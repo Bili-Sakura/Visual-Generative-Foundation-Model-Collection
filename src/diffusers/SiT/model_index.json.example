@@ -4,12 +4,12 @@
     "SiTPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "transformer": [
-    "transformer_sit",
-    "SiTTransformer2DModel"
-  ],
   "vae": [
     "diffusers",
     "AutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_sit",
+    "SiTTransformer2DModel"
   ]
 }

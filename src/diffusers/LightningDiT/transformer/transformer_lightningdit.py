@@ -77,28 +77,32 @@ def _rotate_half(hidden_states: torch.Tensor) -> torch.Tensor:
 
 def _broadcat(tensors, dim=-1):
     num_tensors = len(tensors)
-    shape_len = len(tensors[0].shape)
+    shape_lens = {len(tensor.shape) for tensor in tensors}
+    if len(shape_lens) != 1:
+        raise ValueError("tensors must all have the same number of dimensions")
+    shape_len = shape_lens.pop()
     dim = (dim + shape_len) if dim < 0 else dim
     dims = list(zip(*[list(tensor.shape) for tensor in tensors]))
     expandable_dims = [(index, values) for index, values in enumerate(dims) if index != dim]
-    max_dims = [(index, (values[0], max(values))) for index, values in expandable_dims]
-    expanded_dims = [(index, (values[0],) * num_tensors) for index, values in max_dims]
+    max_dims = [(index, max(values)) for index, values in expandable_dims]
+    expanded_dims = [(index, (size,) * num_tensors) for index, size in max_dims]
     expanded_dims.insert(dim, (dim, dims[dim]))
-    expandable_shapes = [values for _, values in expanded_dims]
-    tensors = [tensor.expand(*shape) for tensor, shape in zip(tensors, expandable_shapes)]
-    return torch.cat(tensors, dim=dim)
+    expandable_shapes = list(zip(*[shape for _, shape in expanded_dims]))
+    return torch.cat([tensor.expand(*shape) for tensor, shape in zip(tensors, expandable_shapes)], dim=dim)
 
 
 class LightningDiTRotaryEmbeddingFast(nn.Module):
+    """2D RoPE matching hustvl/LightningDiT VisionRotaryEmbeddingFast."""
+
     def __init__(self, dim: int, pt_seq_len: int = 16, theta: int = 10000):
         super().__init__()
         freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[:(dim // 2)].float() / dim))
-        positions = torch.arange(pt_seq_len, dtype=torch.float32) / pt_seq_len * pt_seq_len
-        freqs = torch.einsum("n,f->nf", positions, freqs)
+        positions = torch.arange(pt_seq_len, dtype=torch.float32) / float(pt_seq_len) * float(pt_seq_len)
+        freqs = torch.einsum("..., f -> ... f", positions, freqs)
         freqs = freqs.repeat_interleave(2, dim=-1)
         freqs = _broadcat((freqs[:, None, :], freqs[None, :, :]), dim=-1)
-        self.register_buffer("freqs_cos", freqs.cos().reshape(-1, freqs.shape[-1]), persistent=False)
-        self.register_buffer("freqs_sin", freqs.sin().reshape(-1, freqs.shape[-1]), persistent=False)
+        self.register_buffer("freqs_cos", freqs.cos().contiguous().view(-1, freqs.shape[-1]))
+        self.register_buffer("freqs_sin", freqs.sin().contiguous().view(-1, freqs.shape[-1]))
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return hidden_states * self.freqs_cos + _rotate_half(hidden_states) * self.freqs_sin
