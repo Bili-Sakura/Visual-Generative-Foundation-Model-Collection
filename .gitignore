@@ -1,5 +1,8 @@
 /models
 
+# Local git clones under libs/ — manage in each repo, not parent
+/libs/
+
 *.pptx
 *.aux
 *.bbl
