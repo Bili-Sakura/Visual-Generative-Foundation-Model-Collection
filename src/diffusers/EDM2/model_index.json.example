@@ -4,10 +4,6 @@
     "EDM2Pipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "scheduler": [
-    "scheduling_edm2",
-    "EDM2Scheduler"
-  ],
   "vae": [
     "diffusers",
     "AutoencoderKL"

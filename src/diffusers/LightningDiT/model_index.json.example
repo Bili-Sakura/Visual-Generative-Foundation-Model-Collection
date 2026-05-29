@@ -4,16 +4,16 @@
     "LightningDiTPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "scheduler": [
-    "scheduling_flow_match_lightningdit",
-    "LightningDiTFlowMatchScheduler"
+  "transformer": [
+    "transformer_lightningdit",
+    "LightningDiTTransformer2DModel"
   ],
   "vae": [
     "diffusers",
     "AutoencoderKL"
   ],
-  "transformer": [
-    "transformer_lightningdit",
-    "LightningDiTTransformer2DModel"
+  "scheduler": [
+    "scheduling_flow_match_lightningdit",
+    "LightningDiTFlowMatchScheduler"
   ]
 }

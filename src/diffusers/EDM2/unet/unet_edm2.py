@@ -33,7 +33,7 @@ def normalize(x: torch.Tensor, dim: Optional[List[int]] = None, eps: float = 1e-
     if dim is None:
         dim = list(range(1, x.ndim))
     norm = torch.linalg.vector_norm(x, dim=dim, keepdim=True, dtype=torch.float32)
-    norm = torch.add(norm, eps, alpha=math.sqrt(norm.numel() / x.numel()))
+    norm = torch.add(eps, norm, alpha=math.sqrt(norm.numel() / x.numel()))
     return x / norm.to(x.dtype)
 
 

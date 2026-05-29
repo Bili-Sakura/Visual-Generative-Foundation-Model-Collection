@@ -20,7 +20,6 @@ pipe.to("cuda")
 | --- | --- |
 | `pipeline.py` | `EDM2Pipeline` |
 | `unet/` | unet_edm2.py |
-| `scheduler/` | scheduling_edm2.py |
 | `support/` | data.py, losses.py, encoders.py |
 
 ## `model_index.json`

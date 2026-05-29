@@ -4,20 +4,20 @@
     "PixNerdPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "scheduler": [
-    "scheduling_flow_match_pixnerd",
-    "PixNerdFlowMatchScheduler"
+  "transformer": [
+    "transformer_pixnerd",
+    "PixNerdTransformer2DModel"
   ],
   "vae": [
     "autoencoder_pixel",
     "PixNerdPixelVAE"
   ],
-  "transformer": [
-    "transformer_pixnerd",
-    "PixNerdTransformer2DModel"
-  ],
   "conditioner": [
     "conditioner_pixnerd",
     "PixNerdLabelConditioner"
+  ],
+  "scheduler": [
+    "scheduling_flow_match_pixnerd",
+    "PixNerdFlowMatchScheduler"
   ]
 }
