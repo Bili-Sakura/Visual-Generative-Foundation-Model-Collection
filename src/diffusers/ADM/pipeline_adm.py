@@ -113,6 +113,20 @@ class ADMPipeline(DiffusionPipeline):
         return "eta" in step_params
 
     @staticmethod
+    def _prepare_model_output_for_scheduler(
+        model_output: torch.Tensor,
+        channels: int,
+        scheduler,
+    ) -> torch.Tensor:
+        if model_output.shape[1] != 2 * channels:
+            return model_output
+        variance_type = getattr(scheduler.config, "variance_type", None)
+        if scheduler.__class__.__name__ == "DDPMScheduler" and variance_type in ("learned", "learned_range"):
+            return model_output
+        model_output, _ = torch.split(model_output, channels, dim=1)
+        return model_output
+
+    @staticmethod
     def _expand_timestep(timestep, batch: int, device: torch.device) -> torch.Tensor:
         if not torch.is_tensor(timestep):
             timestep = torch.tensor([timestep], dtype=torch.long, device=device)
@@ -246,6 +260,7 @@ class ADMPipeline(DiffusionPipeline):
                         "Use a DDPM/DDIM-compatible scheduler or disable classifier guidance."
                     )
 
+            step_model_output = self._prepare_model_output_for_scheduler(step_model_output, channels, scheduler)
             latents = scheduler.step(step_model_output, timestep, latents, return_dict=True, **extra_step_kwargs).prev_sample
 
         image = latents if output_type == "latent" else (latents / 2 + 0.5).clamp(0, 1)

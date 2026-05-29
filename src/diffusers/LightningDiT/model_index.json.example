@@ -5,8 +5,8 @@
   ],
   "_diffusers_version": "0.31.0",
   "scheduler": [
-    "diffusers",
-    "FlowMatchHeunDiscreteScheduler"
+    "scheduling_flow_match_lightningdit",
+    "LightningDiTFlowMatchScheduler"
   ],
   "vae": [
     "diffusers",

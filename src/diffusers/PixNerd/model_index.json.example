@@ -8,10 +8,6 @@
     "scheduling_flow_match_pixnerd",
     "PixNerdFlowMatchScheduler"
   ],
-  "conditioner": [
-    "conditioner_pixnerd",
-    "PixNerdLabelConditioner"
-  ],
   "vae": [
     "autoencoder_pixel",
     "PixNerdPixelVAE"
@@ -19,5 +15,9 @@
   "transformer": [
     "transformer_pixnerd",
     "PixNerdTransformer2DModel"
+  ],
+  "conditioner": [
+    "conditioner_pixnerd",
+    "PixNerdLabelConditioner"
   ]
 }
