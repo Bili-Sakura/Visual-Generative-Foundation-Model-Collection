@@ -48,12 +48,16 @@ class ModelProfile:
     def infer_resolution(self) -> int:
         if self.default_height:
             return self.default_height
-        name = self.variant.lower()
-        if "512" in name or "img512" in name:
-            return 512
-        if "1024" in name:
-            return 1024
-        return 256
+        return _infer_resolution_from_variant(self.variant)
+
+
+def _infer_resolution_from_variant(variant: str) -> int:
+    name = variant.lower()
+    if "1024" in name:
+        return 1024
+    if "512" in name or "img512" in name or name.endswith("-32") or "-32-" in name:
+        return 512
+    return 256
 
 
 def _p(
@@ -75,13 +79,7 @@ def _p(
     max_steps: int = 250,
 ) -> ModelProfile:
     if default_height is None:
-        name = variant.lower()
-        if "512" in name or "img512" in name:
-            res = 512
-        elif "1024" in name:
-            res = 1024
-        else:
-            res = 256
+        res = _infer_resolution_from_variant(variant)
         default_height = res
         default_width = res
 
@@ -482,3 +480,58 @@ def parse_model_label(label: str) -> tuple[str, str]:
 
 
 MODEL_LABELS: list[str] = [profile.label for profile in MODEL_PROFILES]
+
+NATIVE_SCHEDULER_COLLECTIONS = frozenset(
+    {
+        "EDM2-diffusers",
+        "iMF-diffusers",
+        "pMF-diffusers",
+        "PixelFlow-diffusers",
+        "Self-Flow-diffusers",
+    }
+)
+
+DIFFUSION_SCHEDULERS: list[str] = [
+    "DDPMScheduler",
+    "DDIMScheduler",
+    "PNDMScheduler",
+    "LMSDiscreteScheduler",
+    "EulerDiscreteScheduler",
+    "EulerAncestralDiscreteScheduler",
+    "HeunDiscreteScheduler",
+    "DPMSolverMultistepScheduler",
+    "DPMSolverSinglestepScheduler",
+    "KDPM2DiscreteScheduler",
+    "KDPM2AncestralDiscreteScheduler",
+    "DEISMultistepScheduler",
+    "UniPCMultistepScheduler",
+]
+
+FLOW_SCHEDULERS: list[str] = [
+    "FlowMatchEulerDiscreteScheduler",
+    "FlowMatchHeunDiscreteScheduler",
+]
+
+SWAPPABLE_SCHEDULERS: list[str] = DIFFUSION_SCHEDULERS + [
+    scheduler for scheduler in FLOW_SCHEDULERS if scheduler not in DIFFUSION_SCHEDULERS
+]
+
+
+def uses_native_scheduler(profile: ModelProfile) -> bool:
+    return profile.collection in NATIVE_SCHEDULER_COLLECTIONS
+
+
+def scheduler_family_for_profile(profile: ModelProfile) -> Literal["native", "flow", "diffusion"]:
+    if uses_native_scheduler(profile):
+        return "native"
+    if profile.scheduler and profile.scheduler.startswith("FlowMatch"):
+        return "flow"
+    if profile.collection in {"JiT-diffusers", "SiT-diffusers"}:
+        return "flow"
+    return "diffusion"
+
+
+def scheduler_choices_for_profile(profile: ModelProfile) -> list[str]:
+    if scheduler_family_for_profile(profile) == "native":
+        return []
+    return list(SWAPPABLE_SCHEDULERS)

@@ -22,6 +22,7 @@ try:
     from diffusers.image_processor import VaeImageProcessor
     from diffusers.pipelines.pipeline_utils import DiffusionPipeline
     from diffusers.utils import BaseOutput
+    from diffusers.utils.torch_utils import randn_tensor
 except Exception:  # pragma: no cover
     class BaseOutput(dict):
         def __post_init__(self):
@@ -42,6 +43,9 @@ except Exception:  # pragma: no cover
     class VaeImageProcessor:
         def postprocess(self, image, output_type="pil"):
             return image
+
+    def randn_tensor(shape, generator=None, device=None, dtype=None):
+        return torch.randn(shape, generator=generator, device=device, dtype=dtype)
 
 @dataclass
 class LightningDiTPipelineOutput(BaseOutput):
@@ -175,11 +179,8 @@ class LightningDiTPipeline(DiffusionPipeline):
         if latent_height % patch_size != 0 or latent_width % patch_size != 0:
             raise ValueError("Latent height and width must be divisible by the transformer patch_size.")
 
-        return torch.randn(
-            batch_size,
-            self.transformer.config.in_channels,
-            latent_height,
-            latent_width,
+        return randn_tensor(
+            (batch_size, self.transformer.config.in_channels, latent_height, latent_width),
             generator=generator,
             device=device,
             dtype=dtype,

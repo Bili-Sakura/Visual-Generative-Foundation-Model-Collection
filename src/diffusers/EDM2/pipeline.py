@@ -350,6 +350,9 @@ class EDM2Pipeline(DiffusionPipeline):
 
         device = self._execution_device
         dtype = self.unet.dtype
+        self.unet.eval()
+        if getattr(self, "gnet", None) is not None:
+            self.gnet.eval()
         labels = self._normalize_class_labels(class_labels, batch_size=batch_size, device=device)
         noise = self.prepare_latents(batch_size, height, width, dtype, device, generator)
 
@@ -375,7 +378,7 @@ class EDM2Pipeline(DiffusionPipeline):
         latents = self._sample_edm2_heun(
             denoise_fn=denoise_fn,
             noise=noise,
-            sigmas=self.scheduler.sigmas.to(device),
+            sigmas=self.scheduler.sigmas.to(device).clone(),
             generator=generator,
             progress_bar=self.progress_bar,
             dtype=torch.float32,

@@ -341,6 +341,11 @@ def _resolve_hub_pipeline_source(collection: str, variant_name: str) -> Path | N
     return None
 
 
+SKIP_HUB_SYNC = {
+    ("PixelFlow-diffusers", "PixelFlow-T2I"),
+}
+
+
 def sync_hub_pipelines() -> List[Tuple[Path, Path]]:
     copied: List[Tuple[Path, Path]] = []
     for collection in sorted(COLLECTION_DEFAULT_SRC):
@@ -350,6 +355,8 @@ def sync_hub_pipelines() -> List[Tuple[Path, Path]]:
                 continue
             for variant in sorted(collection_dir.iterdir()):
                 if not variant.is_dir() or variant.name.startswith("."):
+                    continue
+                if (collection, variant.name) in SKIP_HUB_SYNC:
                     continue
                 if not (
                     (variant / "model_index.json").is_file()

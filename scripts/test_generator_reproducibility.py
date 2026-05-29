@@ -615,6 +615,10 @@ def main() -> None:
             }
             cases = [c for c in cases if c in fail_keys]
 
+    skip_t2i = "--skip-t2i" in sys.argv or "--failed-only" in sys.argv
+    if skip_t2i:
+        cases = [c for c in cases if c != ("PixelFlow-diffusers", "PixelFlow-T2I")]
+
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
     results: List[Dict[str, Any]] = []
 

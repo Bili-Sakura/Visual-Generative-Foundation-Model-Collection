@@ -350,15 +350,23 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         channels: int,
         height: int,
         width: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         eps: float = 1e-6,
     ) -> torch.Tensor:
         gamma = self.scheduler.gamma
-        dist = torch.distributions.multivariate_normal.MultivariateNormal(
-            torch.zeros(4),
-            torch.eye(4) * (1 - gamma) + torch.ones(4, 4) * gamma + eps * torch.eye(4),
-        )
+        cov = torch.eye(4, dtype=torch.float32) * (1 - gamma) + torch.ones(4, 4, dtype=torch.float32) * gamma
+        cov = cov + eps * torch.eye(4, dtype=torch.float32)
+        chol = torch.linalg.cholesky(cov).to(device=device, dtype=dtype)
         block_number = batch_size * channels * (height // 2) * (width // 2)
-        noise = torch.stack([dist.sample() for _ in range(block_number)])
+        standard = randn_tensor(
+            (block_number, 4),
+            generator=generator,
+            device=device,
+            dtype=dtype,
+        )
+        noise = standard @ chol.T
         return rearrange(
             noise,
             "(b c h w) (p q) -> b c (h p) (w q)",
@@ -377,6 +385,7 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         height: int,
         width: int,
         device: torch.device,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> torch.Tensor:
         latents = F.interpolate(latents, size=(height, width), mode="nearest")
         original_start_t = self.scheduler.original_start_t[stage_idx]
@@ -384,8 +393,12 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         alpha = 1 / (math.sqrt(1 - (1 / gamma)) * (1 - original_start_t) + original_start_t)
         beta = alpha * (1 - original_start_t) / math.sqrt(-gamma)
 
-        noise = self._sample_block_noise(*latents.shape)
-        noise = noise.to(device=device, dtype=latents.dtype)
+        noise = self._sample_block_noise(
+            *latents.shape,
+            device=device,
+            dtype=latents.dtype,
+            generator=generator,
+        )
         return alpha * latents + beta * noise
 
     def _prepare_rope_pos_embed(self, latents: torch.Tensor, device: torch.device) -> torch.Tensor:
@@ -597,7 +610,9 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
 
             if stage_idx > 0:
                 height, width = height * 2, width * 2
-                latents = self._upsample_latents_for_stage(latents, stage_idx, height, width, latent_device)
+                latents = self._upsample_latents_for_stage(
+                    latents, stage_idx, height, width, latent_device, generator=generator
+                )
                 latents = latents.to(dtype=self.transformer.dtype)
                 size_tensor = torch.tensor([latents.shape[-1] // self.transformer.patch_size], dtype=torch.int32, device=latent_device)
 

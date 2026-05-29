@@ -13,7 +13,12 @@ from diffusers import DiffusionPipeline
 import diffusers.pipelines.pipeline_utils as pipeline_utils
 from huggingface_hub import snapshot_download
 
-from model_catalog import ModelProfile, get_profile
+from model_catalog import (
+    ModelProfile,
+    get_profile,
+    scheduler_choices_for_profile,
+    uses_native_scheduler,
+)
 
 
 def _patch_diffusers_custom_pipeline_type_check() -> None:
@@ -64,13 +69,6 @@ LOCAL_MODELS_ROOT = Path(os.environ.get("LOCAL_MODELS_ROOT", "")).expanduser()
 USE_LOCAL_MODELS = LOCAL_MODELS_ROOT.is_dir()
 HF_ORG = os.environ.get("HF_MODEL_ORG", "BiliSakura")
 
-SCHEDULER_CLASSES = {
-    "DDIMScheduler": "diffusers.DDIMScheduler",
-    "FlowMatchEulerDiscreteScheduler": "diffusers.FlowMatchEulerDiscreteScheduler",
-    "FlowMatchHeunDiscreteScheduler": "diffusers.FlowMatchHeunDiscreteScheduler",
-}
-
-
 class PipelineManager:
     def __init__(self) -> None:
         self._pipe: DiffusionPipeline | None = None
@@ -108,14 +106,6 @@ class PipelineManager:
 
     def _resolve_dtype(self, profile: ModelProfile) -> torch.dtype:
         return torch.bfloat16 if profile.dtype == "bfloat16" else torch.float32
-
-    def _apply_scheduler(self, pipe: DiffusionPipeline, profile: ModelProfile) -> None:
-        if not profile.scheduler:
-            return
-        import diffusers
-
-        scheduler_cls = getattr(diffusers, profile.scheduler)
-        pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config, **profile.scheduler_kwargs)
 
     def _apply_post_load(self, pipe: DiffusionPipeline) -> None:
         pipe.set_progress_bar_config(disable=True)
@@ -157,7 +147,6 @@ class PipelineManager:
             load_kwargs["local_files_only"] = True
 
         pipe = DiffusionPipeline.from_pretrained(model_source, **load_kwargs)
-        self._apply_scheduler(pipe, profile)
         self._apply_post_load(pipe)
 
         self._pipe = pipe
@@ -168,6 +157,45 @@ class PipelineManager:
 
 
 PIPELINE_MANAGER = PipelineManager()
+
+
+def current_scheduler_name(pipe: DiffusionPipeline) -> str:
+    return type(pipe.scheduler).__name__
+
+
+def scheduler_options_for_profile(profile: ModelProfile, pipe: DiffusionPipeline | None = None) -> tuple[list[str], str]:
+    if uses_native_scheduler(profile):
+        if pipe is not None:
+            name = current_scheduler_name(pipe)
+            return [name], name
+        return ["checkpoint"], "checkpoint"
+
+    swappable = scheduler_choices_for_profile(profile)
+    if pipe is not None:
+        loaded = current_scheduler_name(pipe)
+        choices = list(swappable)
+        if loaded not in choices:
+            choices = [loaded, *choices]
+        return choices, loaded
+
+    return ["checkpoint", *swappable], "checkpoint"
+
+
+def swap_scheduler(pipe: DiffusionPipeline, scheduler_name: str, profile: ModelProfile) -> None:
+    if scheduler_name in {"", "checkpoint"}:
+        return
+    current = current_scheduler_name(pipe)
+    if scheduler_name == current:
+        return
+
+    import diffusers
+
+    if not hasattr(diffusers, scheduler_name):
+        raise ValueError(f"Unknown diffusers scheduler: {scheduler_name}")
+
+    scheduler_cls = getattr(diffusers, scheduler_name)
+    extra_kwargs = profile.scheduler_kwargs if profile.scheduler == scheduler_name else {}
+    pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config, **extra_kwargs)
 
 
 def _to_int(value: Any, *, default: int = 0) -> int:
@@ -306,6 +334,18 @@ def default_class_label_for_pipe(pipe: DiffusionPipeline, profile: ModelProfile)
     return synonyms[0] if synonyms else profile.default_class_label
 
 
+def _filter_call_kwargs(pipe: DiffusionPipeline, call_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop kwargs that the pipeline __call__ does not accept (e.g. height/width for iMF/pMF)."""
+    try:
+        params = inspect.signature(pipe.__call__).parameters
+    except (TypeError, ValueError):
+        return call_kwargs
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return call_kwargs
+    accepted = set(params.keys())
+    return {key: value for key, value in call_kwargs.items() if key in accepted}
+
+
 def run_inference(
     profile: ModelProfile,
     pipe: DiffusionPipeline,
@@ -316,6 +356,7 @@ def run_inference(
     guidance_scale: float,
     height: int,
     width: int,
+    scheduler_name: str | None = None,
     extra_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     seed = _to_int(seed, default=profile.default_seed)
@@ -323,6 +364,9 @@ def run_inference(
     guidance_scale = _to_float(guidance_scale, default=profile.default_guidance)
     height = _to_int(height, default=0)
     width = _to_int(width, default=0)
+
+    if scheduler_name and not uses_native_scheduler(profile):
+        swap_scheduler(pipe, str(scheduler_name), profile)
 
     generator = torch.Generator(device="cuda").manual_seed(seed)
     call_kwargs: dict[str, Any] = {
@@ -344,4 +388,4 @@ def run_inference(
             call_kwargs["height"] = height
             call_kwargs["width"] = width
 
-    return pipe(**call_kwargs).images[0]
+    return pipe(**_filter_call_kwargs(pipe, call_kwargs)).images[0]

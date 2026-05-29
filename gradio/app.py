@@ -28,13 +28,17 @@ from model_catalog import (
     MODEL_LABELS,
     get_profile_by_label,
     parse_model_label,
+    scheduler_choices_for_profile,
+    uses_native_scheduler,
 )
 from model_loader import (
     PIPELINE_MANAGER,
     _to_float,
     _to_int,
+    current_scheduler_name,
     default_class_label_for_pipe,
     run_inference,
+    scheduler_options_for_profile,
 )
 
 
@@ -45,16 +49,22 @@ INTERVAL_COLLECTIONS = {"iMF-diffusers", "NiT-diffusers", "PixelFlow-diffusers"}
 PMF_COLLECTION = "pMF-diffusers"
 
 
-def _model_info_markdown(profile) -> str:
+def _model_info_markdown(profile, pipe=None) -> str:
     extras = profile.extra_call_kwargs
     extra_lines = ""
     if extras:
         extra_lines = "\n".join(f"- `{key}`: `{value}`" for key, value in extras.items())
         extra_lines = f"\n\n**Default extra args**\n{extra_lines}"
+    scheduler_line = (
+        f"`{current_scheduler_name(pipe)}`"
+        if pipe is not None
+        else "`checkpoint` (load model to see)"
+    )
     return (
         f"**Hub repo:** [`{profile.hub_model_id}`]({profile.hub_model_url})\n\n"
         f"- dtype: `{profile.dtype}`\n"
         f"- default resolution: `{profile.default_height}x{profile.default_width}`\n"
+        f"- checkpoint scheduler: {scheduler_line}\n"
         f"- GPU size: `{profile.gpu_size}`"
         f"{extra_lines}"
     )
@@ -92,17 +102,39 @@ def _build_extra_kwargs(
     return dict(profile.extra_call_kwargs)
 
 
-def _config_from_profile(profile):
+def _scheduler_config(profile, pipe=None):
+    choices, default = scheduler_options_for_profile(profile, pipe)
+    if uses_native_scheduler(profile) and pipe is None:
+        return gr.update(
+            choices=["checkpoint"],
+            value="checkpoint",
+            interactive=False,
+            info="Uses the checkpoint scheduler (custom, not swappable until loaded)",
+        )
+    return gr.update(
+        choices=choices,
+        value=default,
+        interactive=not uses_native_scheduler(profile),
+        info=(
+            "Checkpoint scheduler by default; pick another built-in diffusers scheduler to swap"
+            if pipe is not None
+            else "Defaults to checkpoint scheduler after Load model; optional built-in swap"
+        ),
+    )
+
+
+def _config_from_profile(profile, pipe=None):
     g_start, g_end = _interval_defaults(profile)
     extras = profile.extra_call_kwargs
     show_interval = profile.collection in INTERVAL_COLLECTIONS
     show_pmf = profile.collection == PMF_COLLECTION
     return (
-        _model_info_markdown(profile),
+        _model_info_markdown(profile, pipe),
         gr.update(value=profile.default_class_label),
         gr.update(value=profile.default_seed),
         gr.update(value=profile.default_steps, maximum=profile.max_steps),
         gr.update(value=profile.default_guidance),
+        _scheduler_config(profile, pipe),
         gr.update(value=profile.default_height or profile.infer_resolution()),
         gr.update(value=profile.default_width or profile.infer_resolution()),
         gr.update(value=g_start),
@@ -153,6 +185,7 @@ def _gpu_duration(
     seed: int,
     num_steps: int,
     guidance_scale: float,
+    scheduler: str,
     height: int,
     width: int,
     guidance_interval_start: float,
@@ -189,7 +222,7 @@ def load_model(model_label: str):
     except Exception as exc:
         raise gr.Error(f"Failed to load `{model_label}`: {exc}") from exc
     profile = get_profile_by_label(model_label)
-    config = _config_from_profile(profile)
+    config = _config_from_profile(profile, PIPELINE_MANAGER.pipe)
     if suggested_label:
         config = list(config)
         config[1] = gr.update(value=suggested_label)
@@ -204,6 +237,7 @@ def _generate_on_gpu(
     seed: int,
     num_steps: int,
     guidance_scale: float,
+    scheduler: str,
     height: int,
     width: int,
     guidance_interval_start: float,
@@ -265,6 +299,7 @@ def _generate_on_gpu(
         guidance_scale=guidance_scale,
         height=height,
         width=width,
+        scheduler_name=scheduler,
         extra_kwargs=extra_kwargs,
     )
 
@@ -275,6 +310,7 @@ def generate(
     seed: int,
     num_steps: int,
     guidance_scale: float,
+    scheduler: str,
     height: int,
     width: int,
     guidance_interval_start: float,
@@ -290,6 +326,7 @@ def generate(
             seed,
             num_steps,
             guidance_scale,
+            scheduler,
             height,
             width,
             guidance_interval_start,
@@ -308,6 +345,8 @@ def generate(
 def build_demo() -> gr.Blocks:
     g_start, g_end = _interval_defaults(DEFAULT_PROFILE)
     extras = DEFAULT_PROFILE.extra_call_kwargs
+    default_scheduler_choices = ["checkpoint", *scheduler_choices_for_profile(DEFAULT_PROFILE)]
+    default_scheduler_value = "checkpoint"
 
     with gr.Blocks(title="BiliSakura Visual Generation Models") as demo:
         gr.Markdown(
@@ -350,6 +389,13 @@ def build_demo() -> gr.Blocks:
                         maximum=20.0,
                         step=0.1,
                         value=DEFAULT_PROFILE.default_guidance,
+                    )
+                    scheduler = gr.Dropdown(
+                        label="scheduler",
+                        choices=default_scheduler_choices or ["checkpoint"],
+                        value=default_scheduler_value,
+                        interactive=not uses_native_scheduler(DEFAULT_PROFILE),
+                        info="Defaults to checkpoint scheduler after Load model",
                     )
                     with gr.Row():
                         height = gr.Slider(
@@ -449,6 +495,7 @@ def build_demo() -> gr.Blocks:
             seed,
             num_steps,
             guidance_scale,
+            scheduler,
             height,
             width,
             guidance_interval_start,
@@ -463,6 +510,7 @@ def build_demo() -> gr.Blocks:
             seed,
             num_steps,
             guidance_scale,
+            scheduler,
             height,
             width,
             guidance_interval_start,
