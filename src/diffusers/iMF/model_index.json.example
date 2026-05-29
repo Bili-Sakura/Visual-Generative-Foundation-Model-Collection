@@ -1,0 +1,15 @@
+{
+  "_class_name": [
+    "pipeline",
+    "IMFPipeline"
+  ],
+  "_diffusers_version": "0.31.0",
+  "scheduler": [
+    "scheduling_imf",
+    "IMFScheduler"
+  ],
+  "transformer": [
+    "transformer_imf",
+    "IMFTransformer2DModel"
+  ]
+}

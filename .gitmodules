@@ -38,6 +38,14 @@
 	path = libs/FiT-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/FiT-diffusers
 
+[submodule "libs/iMF-diffusers"]
+	path = libs/iMF-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/iMF-diffusers
+
+[submodule "libs/iMF-diffusers"]
+	path = libs/iMF-diffusers
+	url = https://ghfast.top/https://github.com/Bili-Sakura/pMF-diffusers
+
 [submodule "libs/JiT-diffusers"]
 	path = libs/JiT-diffusers
 	url = https://ghfast.top/https://github.com/Bili-Sakura/JiT-diffusers
