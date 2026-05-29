@@ -35,11 +35,13 @@ class IMFPipeline(DiffusionPipeline):
     def __init__(
         self,
         transformer,
-        scheduler: Optional["IMFScheduler"] = None,
+        scheduler,
         id2label: Optional[Dict[Union[int, str], str]] = None,
     ):
         super().__init__()
-        self.register_modules(transformer=transformer, scheduler=scheduler or IMFScheduler())
+        if scheduler is None:
+            raise ValueError("IMFPipeline requires a scheduler loaded from the checkpoint.")
+        self.register_modules(transformer=transformer, scheduler=scheduler)
         self._id2label = self._normalize_id2label(id2label)
         self.labels = self._build_label2id(self._id2label)
         self._labels_loaded_from_model_index = bool(self._id2label)
@@ -170,7 +172,7 @@ class IMFPipeline(DiffusionPipeline):
         guidance_interval_end: float = 0.9,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "pt",
+        output_type: Optional[str] = "pil",
         return_dict: bool = True,
     ) -> Union[ImagePipelineOutput, Tuple]:
         if output_type not in {"pil", "np", "pt", "latent"}:

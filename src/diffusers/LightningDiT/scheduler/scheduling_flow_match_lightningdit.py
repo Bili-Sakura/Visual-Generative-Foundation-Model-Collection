@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import torch
 
@@ -74,7 +74,9 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         sample: torch.Tensor,
         next_timestep: torch.Tensor,
         return_dict: bool = True,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> LightningDiTFlowMatchSchedulerOutput:
+        del generator
         sample_dtype = sample.dtype
         sample = sample.to(dtype=torch.float64)
         model_output = model_output.to(dtype=torch.float64)
@@ -94,7 +96,9 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         sample: torch.Tensor,
         next_timestep: torch.Tensor,
         return_dict: bool = True,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> LightningDiTFlowMatchSchedulerOutput:
+        del generator
         sample_dtype = sample.dtype
         sample = sample.to(dtype=torch.float64)
         model_output = model_output.to(dtype=torch.float64)

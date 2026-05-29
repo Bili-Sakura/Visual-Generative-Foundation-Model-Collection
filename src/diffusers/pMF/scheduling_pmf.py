@@ -10,12 +10,12 @@ from diffusers.utils import BaseOutput
 
 
 @dataclass
-class IMFSchedulerOutput(BaseOutput):
+class PMFSchedulerOutput(BaseOutput):
     prev_sample: torch.Tensor
 
 
-class IMFScheduler(SchedulerMixin, ConfigMixin):
-    """Mean-flow scheduler with timesteps from 1.0 to 0.0."""
+class PMFScheduler(SchedulerMixin, ConfigMixin):
+    """Scheduler for Pixel Mean Flow sampling (t: 1 -> 0)."""
 
     order = 1
 
@@ -48,6 +48,7 @@ class IMFScheduler(SchedulerMixin, ConfigMixin):
             raise ValueError("Call `set_timesteps` before `step`.")
         if timestep is None:
             return 0
+
         t_value = float(timestep) if not isinstance(timestep, torch.Tensor) else float(timestep.flatten()[0])
         matches = (self.timesteps - t_value).abs() < 1e-6
         if matches.any():
@@ -61,7 +62,7 @@ class IMFScheduler(SchedulerMixin, ConfigMixin):
         sample: torch.Tensor,
         return_dict: bool = True,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-    ) -> Union[IMFSchedulerOutput, Tuple[torch.Tensor]]:
+    ) -> Union[PMFSchedulerOutput, Tuple[torch.Tensor]]:
         del generator
         if self.timesteps is None:
             raise ValueError("Call `set_timesteps` before `step`.")
@@ -72,12 +73,13 @@ class IMFScheduler(SchedulerMixin, ConfigMixin):
 
         t = self.timesteps[step_index]
         t_next = self.timesteps[step_index + 1]
-        dt = t - t_next
+        dt = (t - t_next).to(dtype=sample.dtype, device=sample.device)
         while dt.ndim < sample.ndim:
             dt = dt.unsqueeze(-1)
+
         prev_sample = sample - dt * model_output
         self._step_index = step_index + 1
 
         if not return_dict:
             return (prev_sample,)
-        return IMFSchedulerOutput(prev_sample=prev_sample)
+        return PMFSchedulerOutput(prev_sample=prev_sample)

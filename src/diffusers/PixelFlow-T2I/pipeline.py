@@ -108,6 +108,29 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         self.image_processor = VaeImageProcessor(vae_scale_factor=1, do_normalize=False)
         self.max_token_length = max_token_length
 
+    @staticmethod
+    def _prepare_generator(
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
+        device: torch.device,
+    ) -> Optional[Union[torch.Generator, List[torch.Generator]]]:
+        if generator is None:
+            return None
+        if isinstance(generator, list):
+            return [PixelFlowT2IPipeline._prepare_generator(item, device) for item in generator]
+
+        gen_device = getattr(generator, "device", torch.device("cpu"))
+        if gen_device.type == device.type:
+            return generator
+        new_generator = torch.Generator(device=device)
+        seed = int(generator.initial_seed())
+        return new_generator.manual_seed(seed)
+
+    def _latent_device(self) -> torch.device:
+        transformer_device = getattr(self.transformer, "device", None)
+        if transformer_device is not None:
+            return transformer_device
+        return self._execution_device
+
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path=None, subfolder=None, **kwargs):
         """Load a self-contained variant folder locally or from the Hub."""
@@ -312,11 +335,12 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         init_factor = 2 ** (self.scheduler.num_stages - 1)
         coarse_height = height // init_factor
         coarse_width = width // init_factor
+        latent_dtype = getattr(self.transformer, "dtype", torch.float32)
         latents = randn_tensor(
             (batch_size, 3, coarse_height, coarse_width),
             generator=generator,
             device=device,
-            dtype=torch.float32,
+            dtype=latent_dtype,
         )
         return latents, coarse_height, coarse_width
 
@@ -536,9 +560,11 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         self.check_inputs(prompt_list, height, width, num_inference_steps, output_type, negative_prompt)
 
         device = self._execution_device
+        latent_device = self._latent_device()
         do_classifier_free_guidance = guidance_scale > 1.0
         stage_steps = self._normalize_stage_steps(num_inference_steps)
         batch_size = len(prompt_list)
+        generator = self._prepare_generator(generator, latent_device)
 
         prompt_embeds, prompt_attention_mask = self.encode_prompt(
             prompt_list,
@@ -552,31 +578,36 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
             batch_size * num_images_per_prompt,
             height,
             width,
-            device,
+            latent_device,
             generator,
         )
-        size_tensor = torch.tensor([latents.shape[-1] // self.transformer.patch_size], dtype=torch.int32, device=device)
+        latents = latents.to(device=latent_device, dtype=self.transformer.dtype)
+        prompt_embeds = prompt_embeds.to(device=latent_device)
+        prompt_attention_mask = prompt_attention_mask.to(device=latent_device)
+        size_tensor = torch.tensor([latents.shape[-1] // self.transformer.patch_size], dtype=torch.int32, device=latent_device)
 
-        autocast_enabled = device.type == "cuda"
+        autocast_enabled = latent_device.type == "cuda"
         autocast_dtype = torch.bfloat16 if autocast_enabled else torch.float32
 
         extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
 
         for stage_idx in range(self.scheduler.num_stages):
-            self.scheduler.set_timesteps(stage_steps[stage_idx], stage_idx, device=device, shift=shift)
+            self.scheduler.set_timesteps(stage_steps[stage_idx], stage_idx, device=latent_device, shift=shift)
             timesteps = self.scheduler.Timesteps
 
             if stage_idx > 0:
                 height, width = height * 2, width * 2
-                latents = self._upsample_latents_for_stage(latents, stage_idx, height, width, device)
-                size_tensor = torch.tensor([latents.shape[-1] // self.transformer.patch_size], dtype=torch.int32, device=device)
+                latents = self._upsample_latents_for_stage(latents, stage_idx, height, width, latent_device)
+                latents = latents.to(dtype=self.transformer.dtype)
+                size_tensor = torch.tensor([latents.shape[-1] // self.transformer.patch_size], dtype=torch.int32, device=latent_device)
 
-            rope_pos = self._prepare_rope_pos_embed(latents, device)
+            rope_pos = self._prepare_rope_pos_embed(latents, latent_device)
 
             for timestep in timesteps:
                 latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                timestep_batch = timestep.expand(latent_model_input.shape[0]).to(latent_model_input.dtype)
-                with torch.autocast(device.type, enabled=autocast_enabled, dtype=autocast_dtype):
+                latent_model_input = latent_model_input.to(device=latent_device, dtype=self.transformer.dtype)
+                timestep_batch = timestep.expand(latent_model_input.shape[0]).to(device=latent_device, dtype=self.transformer.dtype)
+                with torch.autocast(latent_device.type, enabled=autocast_enabled, dtype=autocast_dtype):
                     noise_pred = self.transformer(
                         latent_model_input,
                         encoder_hidden_states=prompt_embeds,

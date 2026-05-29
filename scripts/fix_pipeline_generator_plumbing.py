@@ -52,7 +52,7 @@ COLLECTION_DEFAULT_SRC = {
     "ADM-diffusers": SRC_ROOT / "ADM" / "pipeline.py",
     "DDT-diffusers": SRC_ROOT / "DDT" / "pipeline.py",
     "DeCo-diffusers": SRC_ROOT / "DeCo" / "pipeline.py",
-    "DiT-diffusers": LIBS_ROOT / "DiT-diffusers" / "src" / "diffusers" / "pipelines" / "dit" / "pipeline_dit.py",
+    "DiT-diffusers": SRC_ROOT / "DiT" / "pipeline.py",
     "DiT-MoE-diffusers": SRC_ROOT / "DiT-MoE" / "pipeline.py",
     "EDM2-diffusers": SRC_ROOT / "EDM2" / "pipeline.py",
     "FiT-diffusers": SRC_ROOT / "FiTv2" / "pipeline.py",
@@ -70,7 +70,7 @@ COLLECTION_DEFAULT_SRC = {
     "REPA-E-diffusers": SRC_ROOT / "REPA-E" / "pipeline.py",
     "Self-Flow-diffusers": SRC_ROOT / "Self-Flow" / "pipeline.py",
     "SiT-diffusers": SRC_ROOT / "SiT" / "pipeline.py",
-    "pMF-diffusers": LIBS_ROOT / "pMF-diffusers" / "src" / "diffusers" / "pipelines" / "pmf" / "pipeline_pmf.py",
+    "pMF-diffusers": SRC_ROOT / "pMF" / "pipeline.py",
 }
 
 COMMUNITY_TO_COLLECTION = {
@@ -331,6 +331,10 @@ def _resolve_hub_pipeline_source(collection: str, variant_name: str) -> Path | N
     override = VARIANT_PIPELINE_SOURCES.get((collection, variant_name))
     if override is not None and override.is_file():
         return override
+    if collection == "FiT-diffusers" and variant_name.startswith("FiTv1"):
+        fit_src = SRC_ROOT / "FiT" / "pipeline.py"
+        if fit_src.is_file():
+            return fit_src
     default_src = COLLECTION_DEFAULT_SRC.get(collection)
     if default_src is not None and default_src.is_file():
         return default_src
