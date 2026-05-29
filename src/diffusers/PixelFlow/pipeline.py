@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import importlib
 import json
 import math
@@ -67,6 +69,21 @@ class PixelFlowPipeline(DiffusionPipeline):
         id2label (`dict[int, str]`, *optional*):
             ImageNet class id to English label mapping. Values may contain comma-separated synonyms.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
+
 
     model_cpu_offload_seq = "transformer"
 
@@ -453,6 +470,8 @@ class PixelFlowPipeline(DiffusionPipeline):
         autocast_enabled = device.type == "cuda"
         autocast_dtype = torch.bfloat16 if autocast_enabled else torch.float32
 
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+
         for stage_idx in range(self.scheduler.num_stages):
             self.scheduler.set_timesteps(stage_steps[stage_idx], stage_idx, device=device, shift=shift)
             timesteps = self.scheduler.Timesteps
@@ -481,7 +500,7 @@ class PixelFlowPipeline(DiffusionPipeline):
                     stage_scale = self._stage_guidance_scale(stage_idx, guidance_scale)
                     noise_pred = noise_pred_uncond + stage_scale * (noise_pred_text - noise_pred_uncond)
 
-                latents = self.scheduler.step(model_output=noise_pred, sample=latents).prev_sample
+                latents = self.scheduler.step(model_output=noise_pred, sample=latents, **extra_step_kwargs).prev_sample
 
         image = self.decode_latents(latents, output_type=output_type)
         self.maybe_free_model_hooks()

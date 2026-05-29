@@ -4,6 +4,8 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
+import inspect
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -40,6 +42,20 @@ class RAEV2Pipeline(DiffusionPipeline):
     The pipeline couples a frozen ``RAEModel`` autoencoder with a ``DiTwDDTHead`` transformer
     and the RAEv2 ODE scheduler for class-, text-, or NWM-conditioned sampling.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
 
     model_cpu_offload_seq = "transformer->autoencoder"
     _optional_components = []
@@ -84,6 +100,7 @@ class RAEV2Pipeline(DiffusionPipeline):
                 t_batch,
                 latents,
                 torch.full((batch_size,), float(next_timestep), device=device, dtype=model_dtype),
+                generator=generator,
                 return_dict=True,
             ).prev_sample
 

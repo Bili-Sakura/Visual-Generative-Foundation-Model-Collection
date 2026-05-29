@@ -4,6 +4,8 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
+import inspect
+
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.utils import BaseOutput
@@ -15,7 +17,7 @@ from diffusers.utils.torch_utils import randn_tensor
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Any
 
 import torch
 from tqdm.auto import tqdm
@@ -28,6 +30,21 @@ class MDTPipeline(DiffusionPipeline):
     r"""
     Masked Diffusion Transformer (MDTv2) pipeline for class-conditional latent image synthesis.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
+
 
     model_cpu_offload_seq = "transformer->vae"
     _optional_components = ["vae"]
@@ -141,6 +158,8 @@ class MDTPipeline(DiffusionPipeline):
         self.scheduler.set_timesteps(num_inference_steps, device=device)
         timesteps = self.scheduler.timesteps
 
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+
         iterator = tqdm(timesteps, desc="MDT sampling") if progress else timesteps
 
         use_cfg = guidance_scale > 1.0
@@ -154,7 +173,7 @@ class MDTPipeline(DiffusionPipeline):
                     class_labels,
                     return_dict=False,
                 )
-            latents = self.scheduler.step(noise_pred, timestep, latents, return_dict=False)[0]
+            latents = self.scheduler.step(noise_pred, timestep, latents, return_dict=False, **extra_step_kwargs)[0]
 
         image = self._decode_latents(latents)
         if self.vae is not None:

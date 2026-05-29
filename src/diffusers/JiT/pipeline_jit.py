@@ -4,9 +4,11 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
+import inspect
+
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
@@ -29,6 +31,20 @@ class JiTPipeline(DiffusionPipeline):
         id2label (`dict[int, str]`, *optional*):
             ImageNet class id to English label mapping. Values may contain comma-separated synonyms.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
 
     model_cpu_offload_seq = "transformer"
 
@@ -184,6 +200,7 @@ class JiTPipeline(DiffusionPipeline):
             class_labels_input = class_labels_t
 
         self.scheduler.set_timesteps(num_inference_steps, device=self._execution_device)
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
         for t in self.progress_bar(self.scheduler.timesteps):
             step_index = self.scheduler.index_for_timestep(t, self.scheduler.timesteps)
             sigma = self.scheduler.sigmas[step_index].to(device=latents.device, dtype=latents.dtype)
@@ -218,7 +235,7 @@ class JiTPipeline(DiffusionPipeline):
             sigma = sigma.reshape(*([1] * (latents.ndim - 1)))
             # JiT predicts x0; scheduler integrates in sigma space: dz/dsigma = -(x0 - z) / sigma.
             model_output = -(x_pred - latents) / sigma
-            latents = self.scheduler.step(model_output, t, latents).prev_sample
+            latents = self.scheduler.step(model_output, t, latents, **extra_step_kwargs).prev_sample
 
         images_pt = ((latents.float().clamp(-1, 1) + 1.0) / 2.0).cpu()
         if output_type == "pt":

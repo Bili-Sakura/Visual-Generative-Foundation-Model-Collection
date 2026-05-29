@@ -4,21 +4,38 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
+import inspect
+
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.utils.torch_utils import randn_tensor
 
 class IMFPipeline(DiffusionPipeline):
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
+
     model_cpu_offload_seq = "transformer"
 
     def __init__(
         self,
         transformer,
-        scheduler | None = None,
+        scheduler: Optional["IMFScheduler"] = None,
         id2label: Optional[Dict[Union[int, str], str]] = None,
     ):
         super().__init__()
@@ -182,6 +199,8 @@ class IMFPipeline(DiffusionPipeline):
         self.scheduler.set_timesteps(num_inference_steps, device=latents.device)
         timesteps = self.scheduler.timesteps
 
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+
         for i in self.progress_bar(range(num_inference_steps)):
             t = timesteps[i]
             t_next = timesteps[i + 1]
@@ -197,7 +216,7 @@ class IMFPipeline(DiffusionPipeline):
                 guidance_interval_end,
                 do_classifier_free_guidance,
             )
-            latents = self.scheduler.step(velocity_u, t, latents).prev_sample
+            latents = self.scheduler.step(velocity_u, t, latents, **extra_step_kwargs).prev_sample
 
         if output_type == "latent":
             images = latents

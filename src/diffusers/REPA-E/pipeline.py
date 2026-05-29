@@ -4,12 +4,14 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
+import inspect
+
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Any
 
 import torch
 
@@ -49,6 +51,21 @@ class RepaePipeline(DiffusionPipeline):
     Components are saved as separate subfolders and restored with
     `DiffusionPipeline.from_pretrained`.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
+
 
     model_cpu_offload_seq = "transformer->vae"
     _optional_components = ["vae"]
@@ -127,6 +144,8 @@ class RepaePipeline(DiffusionPipeline):
         null_labels = torch.full_like(class_labels, self.transformer.config.num_classes)
         timesteps = self.scheduler.set_timesteps(num_inference_steps, device=device, mode=mode)
 
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+
         for index, timestep in enumerate(timesteps[:-1]):
             next_timestep = timesteps[index + 1]
             guidance_active = guidance_interval[0] <= float(timestep) <= guidance_interval[1]
@@ -149,7 +168,7 @@ class RepaePipeline(DiffusionPipeline):
 
             if heun and mode == "ode" and index < len(timesteps) - 2:
                 provisional = self.scheduler.step(
-                    model_output, timestep[None], latents, next_timestep[None]
+                    model_output, timestep[None], latents, next_timestep[None], **extra_step_kwargs
                 ).prev_sample
                 if guidance_scale > 1.0 and guidance_active:
                     prime_input = torch.cat([provisional, provisional], dim=0)

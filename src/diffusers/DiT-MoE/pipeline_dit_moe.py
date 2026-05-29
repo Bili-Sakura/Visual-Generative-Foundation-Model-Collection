@@ -9,7 +9,7 @@ import inspect
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import torch
 
@@ -63,6 +63,20 @@ class DiTMoEPipeline(DiffusionPipeline):
     Supports DDIM diffusion sampling and rectified-flow (RF) sampling.
     Each checkpoint keeps an English `id2label` map in `model_index.json` (DiT-style).
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
 
     model_cpu_offload_seq = "transformer->vae"
     _optional_components = ["vae"]
@@ -278,19 +292,6 @@ class DiTMoEPipeline(DiffusionPipeline):
             dtype=dtype,
         )
 
-    @staticmethod
-    def prepare_extra_step_kwargs(
-        scheduler: KarrasDiffusionSchedulers,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
-        eta: float,
-    ) -> Dict[str, object]:
-        kwargs: Dict[str, object] = {}
-        step_params = set(inspect.signature(scheduler.step).parameters.keys())
-        if "eta" in step_params:
-            kwargs["eta"] = eta
-        if "generator" in step_params:
-            kwargs["generator"] = generator
-        return kwargs
 
     def _apply_cfg(self, model_output: torch.Tensor, guidance_scale: float) -> torch.Tensor:
         if guidance_scale <= 1.0:
@@ -394,6 +395,7 @@ class DiTMoEPipeline(DiffusionPipeline):
                     timestep_batch[:batch_size] if do_cfg else timestep_batch,
                     latents_cfg,
                     next_timestep=next_timestep,
+                    **extra_step_kwargs,
                 ).prev_sample
                 latents = step_output if not do_cfg else torch.cat([step_output, step_output], dim=0)
             latents = latents[:batch_size]

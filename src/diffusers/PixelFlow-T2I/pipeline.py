@@ -14,12 +14,14 @@
 
 from __future__ import annotations
 
+import inspect
+
 import importlib
 import json
 import math
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Any
 
 import torch
 import torch.nn.functional as F
@@ -69,6 +71,21 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         tokenizer ([`T5Tokenizer`], *optional*):
             Tokenizer paired with the text encoder.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
+
 
     model_cpu_offload_seq = "text_encoder->transformer"
     _optional_components = ["text_encoder", "tokenizer"]
@@ -543,6 +560,8 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
         autocast_enabled = device.type == "cuda"
         autocast_dtype = torch.bfloat16 if autocast_enabled else torch.float32
 
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+
         for stage_idx in range(self.scheduler.num_stages):
             self.scheduler.set_timesteps(stage_steps[stage_idx], stage_idx, device=device, shift=shift)
             timesteps = self.scheduler.Timesteps
@@ -571,7 +590,7 @@ class PixelFlowT2IPipeline(DiffusionPipeline):
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
-                latents = self.scheduler.step(model_output=noise_pred, sample=latents).prev_sample
+                latents = self.scheduler.step(model_output=noise_pred, sample=latents, **extra_step_kwargs).prev_sample
 
         image = self.decode_latents(latents, output_type=output_type)
         self.maybe_free_model_hooks()

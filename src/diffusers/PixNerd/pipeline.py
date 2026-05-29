@@ -4,6 +4,8 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
+import inspect
+
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.utils import BaseOutput
@@ -24,7 +26,7 @@ from diffusers.utils.torch_utils import randn_tensor
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import torch
 
@@ -82,6 +84,21 @@ class PixNerdPipeline(DiffusionPipeline):
         id2label (`dict[int, str]`, *optional*):
             ImageNet class id to English label mapping. Values may contain comma-separated synonyms.
     """
+
+    @staticmethod
+    def prepare_extra_step_kwargs(
+        scheduler,
+        generator=None,
+        eta: float | None = None,
+    ):
+        kwargs = {}
+        step_params = set(inspect.signature(scheduler.step).parameters.keys())
+        if "generator" in step_params:
+            kwargs["generator"] = generator
+        if eta is not None and "eta" in step_params:
+            kwargs["eta"] = eta
+        return kwargs
+
 
     model_cpu_offload_seq = "conditioner->transformer->vae"
     _callback_tensor_inputs = ["latents"]
@@ -394,6 +411,8 @@ class PixNerdPipeline(DiffusionPipeline):
             device=device,
         )
 
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
+
         for timestep in self.progress_bar(self.scheduler.timesteps):
             cfg_latents = torch.cat([latents, latents], dim=0)
             cfg_t = timestep.repeat(cfg_latents.shape[0]).to(device=device, dtype=latents.dtype)
@@ -408,6 +427,7 @@ class PixNerdPipeline(DiffusionPipeline):
                 model_output=model_output,
                 timestep=timestep,
                 sample=latents,
+                **extra_step_kwargs,
             ).prev_sample
 
         image = self.decode_latents(latents, output_type=output_type)
