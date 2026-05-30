@@ -19,8 +19,8 @@ pipe.to("cuda")
 | Path | Purpose |
 | --- | --- |
 | `pipeline.py` | `EDM2Pipeline` |
-| `unet/` | unet_edm2.py |
-| `support/` | data.py, losses.py, encoders.py |
+| `unet/` | `EDM2UNet2DModel` |
+| `train_edm2.py` | Training script (accelerate + NVlabs EDM2 loss/LR) |
 
 ## `model_index.json`
 
