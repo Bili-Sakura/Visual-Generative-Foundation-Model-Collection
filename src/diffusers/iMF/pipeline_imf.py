@@ -30,6 +30,20 @@ class IMFPipeline(DiffusionPipeline):
             kwargs["eta"] = eta
         return kwargs
 
+    @staticmethod
+    def _prepare_generator(
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
+    ) -> Optional[Union[torch.Generator, List[torch.Generator]]]:
+        if generator is None:
+            return None
+        if isinstance(generator, list):
+            for gen in generator:
+                if gen is not None:
+                    gen.manual_seed(int(gen.initial_seed()))
+            return generator
+        generator.manual_seed(int(generator.initial_seed()))
+        return generator
+
     model_cpu_offload_seq = "transformer"
 
     def __init__(
@@ -183,6 +197,8 @@ class IMFPipeline(DiffusionPipeline):
         image_size = int(self.transformer.config.sample_size)
         channels = int(self.transformer.config.in_channels)
         null_class_val = int(getattr(self.transformer.config, "num_classes", 1000))
+
+        generator = self._prepare_generator(generator)
 
         if latents is None:
             latents = randn_tensor(

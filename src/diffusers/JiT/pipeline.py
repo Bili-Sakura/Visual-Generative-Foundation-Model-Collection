@@ -46,6 +46,26 @@ class JiTPipeline(DiffusionPipeline):
             kwargs["eta"] = eta
         return kwargs
 
+    @staticmethod
+    def _resolve_inference_generator(
+        device: Union[str, torch.device],
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+    ) -> Optional[Union[torch.Generator, List[torch.Generator]]]:
+        if generator is None:
+            return None
+        if isinstance(device, str):
+            device = torch.device(device)
+        device_type = device.type
+
+        def _relocate(gen: torch.Generator) -> torch.Generator:
+            if gen.device.type == device_type:
+                return gen
+            return torch.Generator(device=device_type).manual_seed(gen.initial_seed())
+
+        if isinstance(generator, list):
+            return [_relocate(g) for g in generator]
+        return _relocate(generator)
+
     model_cpu_offload_seq = "transformer"
 
     def __init__(
@@ -163,6 +183,7 @@ class JiTPipeline(DiffusionPipeline):
         do_classifier_free_guidance = guidance_scale is not None and guidance_scale > 1.0
 
         batch_size = len(class_label_ids)
+        generator = self._resolve_inference_generator(self._execution_device, generator)
         image_size = int(self.transformer.config.sample_size)
         patch_size = int(self.transformer.config.patch_size)
         height = int(height or image_size)

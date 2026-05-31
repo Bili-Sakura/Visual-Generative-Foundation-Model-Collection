@@ -7,6 +7,7 @@ import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils import BaseOutput
+from diffusers.utils.torch_utils import randn_tensor
 
 
 @dataclass
@@ -20,8 +21,12 @@ class IMFScheduler(SchedulerMixin, ConfigMixin):
     order = 1
 
     @register_to_config
-    def __init__(self, num_train_timesteps: int = 1000):
-        del num_train_timesteps
+    def __init__(
+        self,
+        num_train_timesteps: int = 1000,
+        shift: float = 1.0,
+        stochastic_sampling: bool = False,
+    ):
         self.timesteps: Optional[torch.Tensor] = None
         self.num_inference_steps: Optional[int] = None
         self._step_index: Optional[int] = None
@@ -62,7 +67,6 @@ class IMFScheduler(SchedulerMixin, ConfigMixin):
         return_dict: bool = True,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> Union[IMFSchedulerOutput, Tuple[torch.Tensor]]:
-        del generator
         if self.timesteps is None:
             raise ValueError("Call `set_timesteps` before `step`.")
 
@@ -72,10 +76,28 @@ class IMFScheduler(SchedulerMixin, ConfigMixin):
 
         t = self.timesteps[step_index]
         t_next = self.timesteps[step_index + 1]
-        dt = t - t_next
+        dt = (t - t_next).to(dtype=sample.dtype, device=sample.device)
         while dt.ndim < sample.ndim:
             dt = dt.unsqueeze(-1)
-        prev_sample = sample - dt * model_output
+
+        if getattr(self.config, "stochastic_sampling", False):
+            t_bc = t.to(dtype=sample.dtype, device=sample.device)
+            while t_bc.ndim < sample.ndim:
+                t_bc = t_bc.unsqueeze(-1)
+            t_next_bc = t_next.to(dtype=sample.dtype, device=sample.device)
+            while t_next_bc.ndim < sample.ndim:
+                t_next_bc = t_next_bc.unsqueeze(-1)
+            x0 = sample - t_bc * model_output
+            noise = randn_tensor(
+                sample.shape,
+                generator=generator,
+                device=sample.device,
+                dtype=sample.dtype,
+            )
+            prev_sample = (1.0 - t_next_bc) * x0 + t_next_bc * noise
+        else:
+            prev_sample = sample - dt * model_output
+
         self._step_index = step_index + 1
 
         if not return_dict:

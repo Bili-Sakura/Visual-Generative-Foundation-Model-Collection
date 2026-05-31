@@ -43,11 +43,17 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
     order = 1
 
     @register_to_config
-    def __init__(self, path_type: str = "linear", num_train_timesteps: int = 1000):
+    def __init__(
+        self,
+        path_type: str = "linear",
+        num_train_timesteps: int = 1000,
+        shift: float = 0.3,
+    ):
         if path_type not in {"linear", "cosine"}:
             raise ValueError("path_type must be either 'linear' or 'cosine'.")
         self.path_type = path_type
         self.num_train_timesteps = num_train_timesteps
+        self.shift = shift
         self.timesteps = torch.linspace(0.0, 1.0, num_train_timesteps + 1, dtype=torch.float64)
 
     @staticmethod
@@ -60,10 +66,11 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         self,
         num_inference_steps: int,
         device: Optional[torch.device] = None,
-        timestep_shift: float = 0.0,
+        timestep_shift: Optional[float] = None,
     ):
+        shift = self.shift if timestep_shift is None else timestep_shift
         timesteps = torch.linspace(0.0, 1.0, num_inference_steps + 1, dtype=torch.float64)
-        timesteps = self._apply_timestep_shift(timesteps, timestep_shift)
+        timesteps = self._apply_timestep_shift(timesteps, shift)
         self.timesteps = timesteps.to(device=device)
         return self.timesteps
 

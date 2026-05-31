@@ -107,8 +107,9 @@ class PipelineManager:
     def _resolve_dtype(self, profile: ModelProfile) -> torch.dtype:
         return torch.bfloat16 if profile.dtype == "bfloat16" else torch.float32
 
-    def _apply_post_load(self, pipe: DiffusionPipeline) -> None:
+    def _apply_post_load(self, pipe: DiffusionPipeline, profile: ModelProfile) -> None:
         pipe.set_progress_bar_config(disable=True)
+        apply_recommended_scheduler(pipe, profile)
 
     def unload(self) -> None:
         if self._pipe is not None:
@@ -147,7 +148,7 @@ class PipelineManager:
             load_kwargs["local_files_only"] = True
 
         pipe = DiffusionPipeline.from_pretrained(model_source, **load_kwargs)
-        self._apply_post_load(pipe)
+        self._apply_post_load(pipe, profile)
 
         self._pipe = pipe
         self._loaded_label = label
@@ -173,12 +174,23 @@ def scheduler_options_for_profile(profile: ModelProfile, pipe: DiffusionPipeline
     swappable = scheduler_choices_for_profile(profile)
     if pipe is not None:
         loaded = current_scheduler_name(pipe)
+        default = profile.scheduler or loaded
         choices = list(swappable)
         if loaded not in choices:
             choices = [loaded, *choices]
-        return choices, loaded
+        if default not in choices:
+            choices = [default, *choices]
+        return choices, default
 
-    return ["checkpoint", *swappable], "checkpoint"
+    preferred = profile.scheduler or "checkpoint"
+    return ["checkpoint", *swappable], preferred
+
+
+def apply_recommended_scheduler(pipe: DiffusionPipeline, profile: ModelProfile) -> None:
+    """Apply notebook-style inference scheduler (e.g. FiTv1 DDPM -> DDIM)."""
+    if not profile.scheduler or uses_native_scheduler(profile):
+        return
+    swap_scheduler(pipe, profile.scheduler, profile)
 
 
 def swap_scheduler(pipe: DiffusionPipeline, scheduler_name: str, profile: ModelProfile) -> None:
@@ -196,6 +208,21 @@ def swap_scheduler(pipe: DiffusionPipeline, scheduler_name: str, profile: ModelP
     scheduler_cls = getattr(diffusers, scheduler_name)
     extra_kwargs = profile.scheduler_kwargs if profile.scheduler == scheduler_name else {}
     pipe.scheduler = scheduler_cls.from_config(pipe.scheduler.config, **extra_kwargs)
+
+
+def _resolve_inference_scheduler(
+    profile: ModelProfile,
+    pipe: DiffusionPipeline,
+    scheduler_name: str | None,
+) -> str | None:
+    if uses_native_scheduler(profile):
+        return None
+    if scheduler_name in {None, "", "checkpoint"}:
+        return profile.scheduler
+    loaded = current_scheduler_name(pipe)
+    if scheduler_name == loaded and profile.scheduler and scheduler_name != profile.scheduler:
+        return profile.scheduler
+    return scheduler_name
 
 
 def _to_int(value: Any, *, default: int = 0) -> int:
@@ -334,6 +361,24 @@ def default_class_label_for_pipe(pipe: DiffusionPipeline, profile: ModelProfile)
     return synonyms[0] if synonyms else profile.default_class_label
 
 
+def _pipe_native_resolution(pipe: DiffusionPipeline) -> int | None:
+    if hasattr(pipe, "_default_image_size"):
+        try:
+            return int(pipe._default_image_size())
+        except (TypeError, ValueError):
+            pass
+    config = getattr(pipe, "config", None)
+    sample_size = getattr(config, "sample_size", None) if config is not None else None
+    if sample_size is not None:
+        scale = int(getattr(pipe, "vae_scale_factor", 8) or 8)
+        return int(sample_size) * scale
+    return None
+
+
+def _prefer_string_class_label(profile: ModelProfile) -> bool:
+    return profile.collection == "FiT-diffusers"
+
+
 def _filter_call_kwargs(pipe: DiffusionPipeline, call_kwargs: dict[str, Any]) -> dict[str, Any]:
     """Drop kwargs that the pipeline __call__ does not accept (e.g. height/width for iMF/pMF)."""
     try:
@@ -365,8 +410,12 @@ def run_inference(
     height = _to_int(height, default=0)
     width = _to_int(width, default=0)
 
-    if scheduler_name and not uses_native_scheduler(profile):
-        swap_scheduler(pipe, str(scheduler_name), profile)
+    target_scheduler = _resolve_inference_scheduler(profile, pipe, scheduler_name)
+    if target_scheduler:
+        swap_scheduler(pipe, target_scheduler, profile)
+
+    if profile.collection == "EDM2-diffusers" and getattr(pipe, "gnet", None) is None:
+        guidance_scale = min(guidance_scale, 1.0)
 
     generator = torch.Generator(device="cuda").manual_seed(seed)
     call_kwargs: dict[str, Any] = {
@@ -376,14 +425,30 @@ def run_inference(
     }
     call_kwargs.update(extra_kwargs if extra_kwargs is not None else profile.extra_call_kwargs)
 
-    call_kwargs["class_labels"] = resolve_class_labels(
+    resolved_label = resolve_class_labels(
         pipe,
         class_label,
         default=profile.default_class_label,
     )
+    if _prefer_string_class_label(profile) and isinstance(resolved_label, int):
+        resolved_label = primary_label_for_id(
+            pipe,
+            resolved_label,
+            fallback=profile.default_class_label,
+        )
+    call_kwargs["class_labels"] = resolved_label
 
     native = profile.infer_resolution()
-    if height > 0 and width > 0:
+    pipe_native = _pipe_native_resolution(pipe)
+    effective_native = pipe_native or native
+
+    if profile.collection == "EDM2-diffusers":
+        if height > 0 and width > 0 and height == effective_native and width == effective_native:
+            call_kwargs["height"] = height
+            call_kwargs["width"] = width
+    elif height > 0 and width > 0:
+        if height != effective_native or width != effective_native:
+            height = width = effective_native
         if profile.collection != "ADM-diffusers" or height != native or width != native:
             call_kwargs["height"] = height
             call_kwargs["width"] = width

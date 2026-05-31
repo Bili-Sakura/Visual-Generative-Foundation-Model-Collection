@@ -113,7 +113,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-xs-fid",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,
@@ -122,7 +121,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-s-fid",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,
@@ -131,7 +129,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-m-fid",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,
@@ -140,7 +137,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-l-fid",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,
@@ -150,7 +146,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-l-dino",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,
@@ -160,7 +155,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-xl-fid",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,
@@ -170,7 +164,6 @@ MODEL_PROFILES: list[ModelProfile] = [
     _p(
         "EDM2-diffusers",
         "edm2-img512-xxl-fid",
-        use_custom_pipeline=False,
         default_steps=32,
         default_guidance=1.0,
         default_height=512,

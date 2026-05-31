@@ -76,7 +76,7 @@ class DiTMoEFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         final_step: bool = False,
         **kwargs,
     ) -> Union[DiTMoEFlowMatchSchedulerOutput, Tuple[torch.Tensor]]:
-        del generator, kwargs
+        del kwargs
 
         if not torch.is_tensor(timestep):
             timestep = torch.tensor(timestep, device=sample.device, dtype=sample.dtype)
@@ -100,7 +100,12 @@ class DiTMoEFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         if self.config.mode == "ode" or final_step:
             prev_sample = sample - dt * model_output
         else:
-            noise = torch.randn_like(sample)
+            if generator is not None:
+                noise = torch.randn(
+                    sample.shape, generator=generator, device=sample.device, dtype=sample.dtype
+                )
+            else:
+                noise = torch.randn_like(sample)
             prev_sample = sample - dt * model_output + torch.sqrt(dt.clamp(min=0.0)) * noise
 
         if not return_dict:

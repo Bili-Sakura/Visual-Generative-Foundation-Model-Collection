@@ -7,6 +7,7 @@ import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 from diffusers.utils import BaseOutput
+from diffusers.utils.torch_utils import randn_tensor
 
 
 @dataclass
@@ -20,7 +21,11 @@ class PMFScheduler(SchedulerMixin, ConfigMixin):
     order = 1
 
     @register_to_config
-    def __init__(self, num_train_timesteps: int = 1000):
+    def __init__(
+        self,
+        num_train_timesteps: int = 1000,
+        stochastic_sampling: bool = False,
+    ):
         del num_train_timesteps
         self.timesteps: Optional[torch.Tensor] = None
         self.num_inference_steps: Optional[int] = None
@@ -55,6 +60,25 @@ class PMFScheduler(SchedulerMixin, ConfigMixin):
             return int(matches.nonzero(as_tuple=False)[0].item())
         return 0
 
+    @staticmethod
+    def _expand_time(value: torch.Tensor, sample: torch.Tensor) -> torch.Tensor:
+        value = value.to(dtype=sample.dtype, device=sample.device)
+        while value.ndim < sample.ndim:
+            value = value.unsqueeze(-1)
+        return value
+
+    def _sample_noise(
+        self,
+        sample: torch.Tensor,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+    ) -> torch.Tensor:
+        return randn_tensor(
+            sample.shape,
+            generator=generator,
+            device=sample.device,
+            dtype=sample.dtype,
+        )
+
     def step(
         self,
         model_output: torch.Tensor,
@@ -63,7 +87,6 @@ class PMFScheduler(SchedulerMixin, ConfigMixin):
         return_dict: bool = True,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> Union[PMFSchedulerOutput, Tuple[torch.Tensor]]:
-        del generator
         if self.timesteps is None:
             raise ValueError("Call `set_timesteps` before `step`.")
 
@@ -73,11 +96,17 @@ class PMFScheduler(SchedulerMixin, ConfigMixin):
 
         t = self.timesteps[step_index]
         t_next = self.timesteps[step_index + 1]
-        dt = (t - t_next).to(dtype=sample.dtype, device=sample.device)
-        while dt.ndim < sample.ndim:
-            dt = dt.unsqueeze(-1)
+        dt = self._expand_time(t - t_next, sample)
 
-        prev_sample = sample - dt * model_output
+        if self.config.stochastic_sampling:
+            t_expanded = self._expand_time(t, sample)
+            t_next_expanded = self._expand_time(t_next, sample)
+            x0 = sample - t_expanded * model_output
+            noise = self._sample_noise(sample, generator=generator)
+            prev_sample = (1.0 - t_next_expanded) * x0 + t_next_expanded * noise
+        else:
+            prev_sample = sample - dt * model_output
+
         self._step_index = step_index + 1
 
         if not return_dict:

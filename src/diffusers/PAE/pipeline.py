@@ -175,6 +175,7 @@ class PAEPipeline(DiffusionPipeline):
             generator,
         )
         timesteps = self.scheduler.set_timesteps(num_inference_steps, device=device, mode=mode)
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
         null_label = num_classes
 
         for index, timestep in enumerate(timesteps[:-1]):
@@ -211,6 +212,7 @@ class PAEPipeline(DiffusionPipeline):
                     timestep[None],
                     latents,
                     next_timestep[None],
+                    **extra_step_kwargs,
                 ).prev_sample
                 next_t = torch.full((batch_size,), float(next_timestep), device=device, dtype=model_dtype)
                 if guidance_active:
@@ -243,7 +245,7 @@ class PAEPipeline(DiffusionPipeline):
                     timestep[None],
                     latents,
                     next_timestep[None],
-                    generator=generator,
+                    **extra_step_kwargs,
                 ).prev_sample
 
         image = self._decode_latents(latents.to(dtype=model_dtype))

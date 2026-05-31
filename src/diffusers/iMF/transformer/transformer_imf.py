@@ -191,9 +191,9 @@ class IMFTimestepEmbedder(nn.Module):
     def timestep_embedding(t: torch.Tensor, dim: int, max_period: int = 10000) -> torch.Tensor:
         half = dim // 2
         freqs = torch.exp(
-            -math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32, device=t.device) / half
+            -math.log(max_period) * torch.arange(start=0, end=half, dtype=t.dtype, device=t.device) / half
         )
-        args = t[:, None].float() * freqs[None]
+        args = t[:, None] * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
@@ -245,12 +245,12 @@ def precompute_rope_freqs(dim: int, seq_len: int, theta: float = 10000.0, device
 
 
 def apply_rotary_pos_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-    x_complex = x.to(torch.float32).view(torch.complex64)
-    x_complex = x_complex.reshape(*x.shape[:-1], -1)
+    x_dtype = x.dtype
+    x_complex = torch.view_as_complex(x.to(torch.float32).reshape(*x.shape[:-1], -1, 2))
     freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(2).to(x.device)
     x_rotated = x_complex * freqs_cis
-    x_out = x_rotated.to(x_complex.dtype).view(x.dtype)
-    return x_out.reshape(x.shape)
+    x_out = torch.view_as_real(x_rotated).flatten(-2)
+    return x_out.to(dtype=x_dtype)
 
 
 class IMFRoPEAttention(nn.Module):
@@ -277,7 +277,7 @@ class IMFRoPEAttention(nn.Module):
         query = q / math.sqrt(self.head_dim)
         attn_weights = torch.einsum("bqhd,bkhd->bhqk", query, k)
         attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32)
-        attn = torch.einsum("bhqk,bkhd->bqhd", attn_weights, v)
+        attn = torch.einsum("bhqk,bkhd->bqhd", attn_weights.to(dtype=v.dtype), v)
         return self.out_proj(attn.reshape(batch, seq_len, self.hidden_size))
 
 

@@ -339,7 +339,6 @@ class LightningDiTPipeline(DiffusionPipeline):
 
         image = self._decode_latents(latents)
         if self.vae is not None:
-            image = (image / 2 + 0.5).clamp(0, 1)
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         self.maybe_free_model_hooks()

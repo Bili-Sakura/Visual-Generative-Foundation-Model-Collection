@@ -61,6 +61,41 @@ class PMFPipeline(DiffusionPipeline):
             kwargs["eta"] = eta
         return kwargs
 
+    @staticmethod
+    def _resolve_inference_generator(
+        device: Union[str, torch.device],
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+    ) -> Optional[Union[torch.Generator, List[torch.Generator]]]:
+        if generator is None:
+            return None
+        if isinstance(device, str):
+            device = torch.device(device)
+        device_type = device.type
+
+        def _relocate(gen: torch.Generator) -> torch.Generator:
+            if gen.device.type == device_type:
+                return gen
+            return torch.Generator(device=device_type).manual_seed(gen.initial_seed())
+
+        if isinstance(generator, list):
+            return [_relocate(g) for g in generator]
+        return _relocate(generator)
+
+    @staticmethod
+    def _prepare_generator(
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]],
+    ) -> Optional[Union[torch.Generator, List[torch.Generator]]]:
+        """Reset generator state so repeated `__call__` with the same object is reproducible."""
+        if generator is None:
+            return None
+        if isinstance(generator, list):
+            for gen in generator:
+                if gen is not None:
+                    gen.manual_seed(int(gen.initial_seed()))
+            return generator
+        generator.manual_seed(int(generator.initial_seed()))
+        return generator
+
     def _ensure_labels_loaded(self) -> None:
         if self._labels_loaded_from_model_index:
             return
@@ -189,6 +224,8 @@ class PMFPipeline(DiffusionPipeline):
 
         class_label_ids = self._normalize_class_labels(class_labels)
         batch_size = len(class_label_ids)
+        generator = self._resolve_inference_generator(self._execution_device, generator)
+        generator = self._prepare_generator(generator)
         image_size = int(self.transformer.config.sample_size)
         channels = int(self.transformer.config.in_channels)
         null_class_val = int(

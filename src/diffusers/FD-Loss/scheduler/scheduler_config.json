@@ -1,0 +1,6 @@
+{
+  "_class_name": "FDLossFlowMatchScheduler",
+  "_diffusers_version": "0.36.0",
+  "num_train_timesteps": 1000,
+  "stochastic_sampling": false
+}
