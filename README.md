@@ -23,7 +23,7 @@ A selected collection of CORE visual generative foundation model including code,
 - [x] DiT-MoE
 - [ ] EPG
 - [x] EDM2
-- [ ] FD-Loss
+- [x] FD-Loss
 - [x] FiT
 - [x] FiTv2
 - [x] iMF
