@@ -74,6 +74,54 @@ def _get_float_dtype_or_default(tensor: Optional[torch.Tensor] = None) -> torch.
     return torch.get_default_dtype()
 
 
+# VisionYaRN / VisionNTK helpers (from native NiT / FiT VisionRotaryEmbedding).
+def _find_correction_factor(num_rotations, dim, base=10000, max_position_embeddings=2048):
+    return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
+
+
+def _find_correction_range(low_rot, high_rot, dim, base=10000, max_position_embeddings=2048):
+    low = math.floor(_find_correction_factor(low_rot, dim, base, max_position_embeddings))
+    high = math.ceil(_find_correction_factor(high_rot, dim, base, max_position_embeddings))
+    return max(low, 0), min(high, dim - 1)
+
+
+def _linear_ramp_mask(min_value, max_value, dim):
+    if min_value == max_value:
+        max_value += 0.001
+    linear_func = (torch.arange(dim, dtype=torch.float32) - min_value) / (max_value - min_value)
+    return torch.clamp(linear_func, 0, 1)
+
+
+def _find_newbase_ntk(dim, base=10000, scale=1):
+    return base * scale ** (dim / (dim - 2))
+
+
+def _get_mscale(scale: torch.Tensor) -> torch.Tensor:
+    return torch.where(scale <= 1.0, torch.tensor(1.0), 0.1 * torch.log(scale) + 1.0)
+
+
+def _get_proportion(length_test, length_train):
+    length_test = length_test * 2
+    ratio = length_test / length_train
+    return torch.where(
+        torch.tensor(ratio) <= 1.0,
+        torch.tensor(1.0),
+        torch.sqrt(torch.log(torch.tensor(length_test)) / torch.log(torch.tensor(length_train))),
+    )
+
+
+TRAINED_ROPE_FREQS = {"normal", "scale1", "scale2"}
+EXTRAPOLATION_ROPE_FREQS = {
+    "linear",
+    "ntk-aware",
+    "ntk-aware-pro1",
+    "ntk-aware-pro2",
+    "ntk-by-parts",
+    "yarn",
+}
+SUPPORTED_ROPE_FREQS = TRAINED_ROPE_FREQS | EXTRAPOLATION_ROPE_FREQS
+
+
 class NiTPatchEmbed(nn.Module):
     def __init__(self, patch_size: int, in_channels: int, hidden_size: int):
         super().__init__()
@@ -125,6 +173,8 @@ class NiTLabelEmbedder(nn.Module):
 
 
 class NiTRotaryEmbedding(nn.Module):
+    """2D axial RoPE with VisionYaRN (`yarn`) and VisionNTK extrapolation modes."""
+
     def __init__(
         self,
         head_dim: int,
@@ -137,25 +187,126 @@ class NiTRotaryEmbedding(nn.Module):
         ori_max_pe_len: Optional[int] = None,
     ):
         super().__init__()
-        del max_pe_len_h, max_pe_len_w, decouple, ori_max_pe_len
-        if custom_freqs not in {"normal", "scale1", "scale2"}:
+        custom_freqs = custom_freqs.lower()
+        if custom_freqs not in SUPPORTED_ROPE_FREQS:
             raise ValueError(
-                "This Diffusers implementation supports the trained RoPE frequencies directly. "
-                "Checkpoint conversion preserves weights; extrapolation variants should be handled "
-                "by changing the model config before loading."
+                f"Unsupported RoPE frequency variant {custom_freqs!r}. "
+                f"Supported values: {sorted(SUPPORTED_ROPE_FREQS)}."
             )
+        if custom_freqs not in TRAINED_ROPE_FREQS and (
+            max_pe_len_h is None or max_pe_len_w is None or ori_max_pe_len is None
+        ):
+            raise ValueError(
+                f"Extrapolation mode {custom_freqs!r} requires max_pe_len_h, max_pe_len_w, and ori_max_pe_len."
+            )
+
         dim = head_dim // 2
         if dim % 2 != 0:
             raise ValueError("NiT rotary embedding requires head_dim // 2 to be even.")
+
+        self.dim = dim
+        self.custom_freqs = custom_freqs
+        self.theta = theta
+        self.decouple = decouple
+        self.ori_max_pe_len = ori_max_pe_len
         default_dtype = _get_float_dtype_or_default()
-        freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=default_dtype) / dim))
-        self.register_buffer("freqs_h", freqs, persistent=False)
-        self.register_buffer("freqs_w", freqs.clone(), persistent=False)
-        positions = torch.arange(max_cached_len, dtype=default_dtype)
+
+        if custom_freqs in TRAINED_ROPE_FREQS:
+            freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=default_dtype) / dim))
+            freqs_h = freqs
+            freqs_w = freqs.clone()
+        else:
+            if decouple:
+                freqs_h = self._get_1d_rope_freqs(theta, dim, max_pe_len_h, ori_max_pe_len, default_dtype)
+                freqs_w = self._get_1d_rope_freqs(theta, dim, max_pe_len_w, ori_max_pe_len, default_dtype)
+            else:
+                max_pe_len = max(max_pe_len_h, max_pe_len_w)
+                freqs = self._get_1d_rope_freqs(theta, dim, max_pe_len, ori_max_pe_len, default_dtype)
+                freqs_h = freqs
+                freqs_w = freqs.clone()
+
+        if max_pe_len_h is not None and max_pe_len_w is not None and ori_max_pe_len is not None:
+            scale = torch.clamp_min(torch.tensor(max(max_pe_len_h, max_pe_len_w)) / ori_max_pe_len, 1.0)
+            proportion1 = _get_proportion(max(max_pe_len_h, max_pe_len_w), ori_max_pe_len)
+            proportion2 = _get_proportion(max_pe_len_h * max_pe_len_w, ori_max_pe_len**2)
+            self.register_buffer("mscale", _get_mscale(scale).to(default_dtype), persistent=False)
+            self.register_buffer(
+                "proportion1",
+                proportion1.to(dtype=default_dtype) if isinstance(proportion1, torch.Tensor) else torch.tensor(float(proportion1), dtype=default_dtype),
+                persistent=False,
+            )
+            self.register_buffer(
+                "proportion2",
+                proportion2.to(dtype=default_dtype) if isinstance(proportion2, torch.Tensor) else torch.tensor(float(proportion2), dtype=default_dtype),
+                persistent=False,
+            )
+
+        self.register_buffer("freqs_h", freqs_h, persistent=False)
+        self.register_buffer("freqs_w", freqs_w, persistent=False)
+
+        cache_len = max(max_cached_len, max_pe_len_h or 0, max_pe_len_w or 0, 1)
+        positions = torch.arange(cache_len, dtype=default_dtype)
         freqs_h_cached = torch.einsum("n,f->nf", positions, self.freqs_h).repeat_interleave(2, dim=-1)
         freqs_w_cached = torch.einsum("n,f->nf", positions, self.freqs_w).repeat_interleave(2, dim=-1)
         self.register_buffer("freqs_h_cached", freqs_h_cached, persistent=False)
         self.register_buffer("freqs_w_cached", freqs_w_cached, persistent=False)
+
+    def _get_1d_rope_freqs(self, theta, dim, max_pe_len, ori_max_pe_len, default_dtype):
+        assert isinstance(ori_max_pe_len, int)
+        if not isinstance(max_pe_len, torch.Tensor):
+            max_pe_len = torch.tensor(max_pe_len, dtype=default_dtype)
+        scale = torch.clamp_min(max_pe_len / ori_max_pe_len, 1.0)
+        freq_indices = torch.arange(0, dim, 2, dtype=default_dtype) / dim
+
+        if self.custom_freqs == "linear":
+            freqs = 1.0 / torch.einsum("..., f -> ... f", scale, theta**freq_indices)
+        elif self.custom_freqs in {"ntk-aware", "ntk-aware-pro1", "ntk-aware-pro2"}:
+            freqs = 1.0 / torch.pow(
+                _find_newbase_ntk(dim, theta, scale).view(-1, 1),
+                freq_indices.to(scale),
+            ).squeeze()
+        elif self.custom_freqs == "ntk-by-parts":
+            beta_0, beta_1 = 1.25, 0.75
+            gamma_0, gamma_1 = 16, 2
+            freqs_base = 1.0 / (theta**freq_indices)
+            freqs_linear = 1.0 / torch.einsum("..., f -> ... f", scale, theta**freq_indices.to(scale))
+            freqs_ntk = 1.0 / torch.pow(
+                _find_newbase_ntk(dim, theta, scale).view(-1, 1),
+                freq_indices.to(scale),
+            ).squeeze()
+            low, high = _find_correction_range(beta_0, beta_1, dim, theta, ori_max_pe_len)
+            freqs_mask = 1 - _linear_ramp_mask(low, high, dim // 2).to(scale)
+            freqs = freqs_linear * (1 - freqs_mask) + freqs_ntk * freqs_mask
+            low, high = _find_correction_range(gamma_0, gamma_1, dim, theta, ori_max_pe_len)
+            freqs_mask = 1 - _linear_ramp_mask(low, high, dim // 2).to(scale)
+            freqs = freqs * (1 - freqs_mask) + freqs_base * freqs_mask
+        elif self.custom_freqs == "yarn":
+            beta_fast, beta_slow = 32, 1
+            freqs_extrapolation = 1.0 / (theta**freq_indices.to(scale))
+            freqs_interpolation = 1.0 / torch.einsum("..., f -> ... f", scale, theta**freq_indices.to(scale))
+            low, high = _find_correction_range(beta_fast, beta_slow, dim, theta, ori_max_pe_len)
+            freqs_mask = (1 - _linear_ramp_mask(low, high, dim // 2).to(scale).float())
+            freqs = freqs_interpolation * (1 - freqs_mask) + freqs_extrapolation * freqs_mask
+        else:
+            raise ValueError(f"Unknown extrapolation mode {self.custom_freqs!r}.")
+
+        if isinstance(freqs, torch.Tensor) and freqs.ndim > 1:
+            freqs = freqs.squeeze()
+        return freqs.to(default_dtype)
+
+    def _apply_magnitude_scaling(
+        self, freqs_cos: torch.Tensor, freqs_sin: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.custom_freqs == "yarn" and hasattr(self, "mscale"):
+            freqs_cos = freqs_cos * self.mscale
+            freqs_sin = freqs_sin * self.mscale
+        elif self.custom_freqs in {"ntk-aware-pro1", "scale1"} and hasattr(self, "proportion1"):
+            freqs_cos = freqs_cos * self.proportion1
+            freqs_sin = freqs_sin * self.proportion1
+        elif self.custom_freqs in {"ntk-aware-pro2", "scale2"} and hasattr(self, "proportion2"):
+            freqs_cos = freqs_cos * self.proportion2
+            freqs_sin = freqs_sin * self.proportion2
+        return freqs_cos, freqs_sin
 
     def forward(self, image_sizes: torch.LongTensor, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         grids = []
@@ -166,10 +317,12 @@ class NiTRotaryEmbedding(nn.Module):
             grid = torch.meshgrid(grid_h, grid_w, indexing="xy")
             grids.append(torch.stack(grid, dim=0).reshape(2, -1))
         grid = torch.cat(grids, dim=1)
+
         freqs_h = self.freqs_h_cached.to(device)[grid[0]]
         freqs_w = self.freqs_w_cached.to(device)[grid[1]]
         freqs = torch.cat([freqs_h, freqs_w], dim=-1)
-        return freqs.cos().unsqueeze(1), freqs.sin().unsqueeze(1)
+        freqs_cos, freqs_sin = self._apply_magnitude_scaling(freqs.cos(), freqs.sin())
+        return freqs_cos.unsqueeze(1), freqs_sin.unsqueeze(1)
 
 
 class NiTAttention(nn.Module):
@@ -366,6 +519,38 @@ class NiTTransformer2DModel(ModelMixin, ConfigMixin):
             ]
         )
         self.final_layer = NiTFinalLayer(hidden_size, patch_size, self.out_channels)
+
+    def configure_rope_extrapolation(
+        self,
+        custom_freqs: str,
+        max_pe_len_h: int,
+        max_pe_len_w: int,
+        ori_max_pe_len: int,
+        decouple: bool = False,
+        theta: Optional[int] = None,
+    ) -> None:
+        """Configure VisionYaRN / VisionNTK extrapolation before high-resolution inference."""
+        theta = int(theta if theta is not None else getattr(self.config, "theta", 10000))
+        head_dim = self.config.hidden_size // self.config.num_heads
+        self.rope = NiTRotaryEmbedding(
+            head_dim,
+            custom_freqs=custom_freqs,
+            theta=theta,
+            max_pe_len_h=max_pe_len_h,
+            max_pe_len_w=max_pe_len_w,
+            decouple=decouple,
+            ori_max_pe_len=ori_max_pe_len,
+        )
+        for key, value in {
+            "custom_freqs": custom_freqs.lower(),
+            "max_pe_len_h": max_pe_len_h,
+            "max_pe_len_w": max_pe_len_w,
+            "decouple": decouple,
+            "ori_max_pe_len": ori_max_pe_len,
+            "theta": theta,
+        }.items():
+            if hasattr(self.config, key):
+                setattr(self.config, key, value)
 
     def _pack_latents(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, torch.LongTensor, Tuple[int, int]]:
         batch_size, channels, height, width = hidden_states.shape

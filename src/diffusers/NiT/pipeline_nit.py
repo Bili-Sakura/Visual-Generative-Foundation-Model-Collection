@@ -212,11 +212,27 @@ class NiTPipeline(DiffusionPipeline):
         width: int,
         num_inference_steps: int,
         output_type: str,
+        interpolation: Optional[str] = None,
+        ori_max_pe_len: Optional[int] = None,
     ) -> None:
         if num_inference_steps < 1:
             raise ValueError("num_inference_steps must be >= 1.")
         if output_type not in {"pil", "np", "pt", "latent"}:
             raise ValueError("output_type must be one of: 'pil', 'np', 'pt', 'latent'.")
+        if interpolation is not None and interpolation not in {
+            "no",
+            "linear",
+            "ntk-aware",
+            "ntk-by-parts",
+            "yarn",
+            "ntk-aware-pro1",
+            "ntk-aware-pro2",
+            "scale1",
+            "scale2",
+        }:
+            raise ValueError(f"Unsupported interpolation mode: {interpolation!r}.")
+        if interpolation not in {None, "no"} and ori_max_pe_len is None:
+            raise ValueError("ori_max_pe_len is required when interpolation is enabled.")
 
         spatial_downsample = self._get_vae_spatial_downsample()
         if height % spatial_downsample != 0 or width % spatial_downsample != 0:
@@ -260,6 +276,29 @@ class NiTPipeline(DiffusionPipeline):
             dtype=dtype,
         )
         return packed_latents, image_sizes
+
+    def _maybe_configure_rope_extrapolation(
+        self,
+        height: int,
+        width: int,
+        interpolation: Optional[str],
+        ori_max_pe_len: Optional[int],
+        decouple: bool,
+    ) -> None:
+        if interpolation in {None, "no"}:
+            return
+
+        spatial_downsample = self._get_vae_spatial_downsample()
+        patch_size = int(self.transformer.config.patch_size)
+        latent_h = height // spatial_downsample // patch_size
+        latent_w = width // spatial_downsample // patch_size
+        self.transformer.configure_rope_extrapolation(
+            custom_freqs=interpolation,
+            max_pe_len_h=latent_h,
+            max_pe_len_w=latent_w,
+            ori_max_pe_len=int(ori_max_pe_len),
+            decouple=decouple,
+        )
 
     def _apply_classifier_free_guidance(
         self,
@@ -305,6 +344,9 @@ class NiTPipeline(DiffusionPipeline):
         num_inference_steps: int = 50,
         guidance_scale: float = 1.0,
         guidance_interval: Tuple[float, float] = (0.0, 1.0),
+        interpolation: Optional[str] = None,
+        ori_max_pe_len: Optional[int] = None,
+        decouple: bool = False,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         output_type: str = "pil",
         return_dict: bool = True,
@@ -325,6 +367,16 @@ class NiTPipeline(DiffusionPipeline):
                 Classifier-free guidance scale. CFG is active when `guidance_scale > 1.0`.
             guidance_interval (`tuple[float, float]`, defaults to `(0.0, 1.0)`):
                 Flow-time interval where CFG is applied.
+            interpolation (`str`, *optional*):
+                VisionYaRN / VisionNTK extrapolation mode. Use `"yarn"` for VisionYaRN or
+                `"ntk-aware"`, `"ntk-by-parts"`, `"ntk-aware-pro1"`, `"ntk-aware-pro2"`,
+                `"scale1"`, or `"scale2"` for VisionNTK variants. Pass `"no"` or omit to use
+                the transformer's configured RoPE.
+            ori_max_pe_len (`int`, *optional*):
+                Original maximum latent side length seen during training. Required when
+                `interpolation` is enabled.
+            decouple (`bool`, defaults to `False`):
+                Whether to decouple height and width when computing extrapolated RoPE frequencies.
             generator (`torch.Generator`, *optional*):
                 RNG for reproducibility.
             output_type (`str`, defaults to `"pil"`):
@@ -335,7 +387,8 @@ class NiTPipeline(DiffusionPipeline):
         default_size = DEFAULT_NATIVE_RESOLUTION if self.vae is not None else 256
         height = int(height or default_size)
         width = int(width or default_size)
-        self.check_inputs(height, width, num_inference_steps, output_type)
+        self.check_inputs(height, width, num_inference_steps, output_type, interpolation, ori_max_pe_len)
+        self._maybe_configure_rope_extrapolation(height, width, interpolation, ori_max_pe_len, decouple)
 
         device = self._execution_device
         model_dtype = next(self.transformer.parameters()).dtype
