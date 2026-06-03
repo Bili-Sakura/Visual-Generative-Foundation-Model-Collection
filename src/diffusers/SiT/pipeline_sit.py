@@ -28,6 +28,7 @@ import torch
 
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from diffusers.utils.torch_utils import randn_tensor
 
 EXAMPLE_DOC_STRING = """
