@@ -9,6 +9,8 @@ A selected collection of CORE visual generative foundation model including code,
 
 ## TODO: @src/diffusers Models
 
+- [ ] PixelDiT
+- [ ] JLT
 - [x] JiT
 - [x] NiT
 - [x] PixNerd
