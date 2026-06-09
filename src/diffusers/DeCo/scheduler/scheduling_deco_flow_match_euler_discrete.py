@@ -5,12 +5,7 @@ from typing import Optional, Union
 import torch
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.image_processor import VaeImageProcessor
-from diffusers.models.modeling_utils import ModelMixin
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.schedulers.scheduling_utils import SchedulerMixin, SchedulerOutput
-from diffusers.utils import BaseOutput
-from diffusers.utils.torch_utils import randn_tensor
 
 
 

@@ -38,12 +38,14 @@ LIB_TO_COMMUNITY: Dict[str, str] = {
     "FD-Loss-diffusers": "FD-Loss",
     "FiT-diffusers": "FiT",
     "JiT-diffusers": "JiT",
+    "JLT-diffusers": "JLT",
     "LightningDiT-diffusers": "LightningDiT",
     "MDT-diffusers": "MDT",
     "MVSplit-DiT-diffusers": "MVSplit",
     "NiT-diffusers": "NiT",
     "PAE-diffusers": "PAE",
     "PixNerd-diffusers": "PixNerd",
+    "ProMoE-diffusers": "ProMoE",
     "RAE-diffusers": "RAE",
     "RAEv2-diffusers": "RAEv2",
     "REPA-E-diffusers": "REPA-E",
@@ -56,6 +58,7 @@ PATH_TO_HUB_FOLDER: List[Tuple[str, str]] = [
     ("models/transformers/", "transformer"),
     ("models/unets/", "unet"),
     ("models/autoencoders/", "vae"),
+    ("models/decoders/", "decoder"),
     ("models/conditioners/", "conditioner"),
     ("models/denoisers/", "denoiser"),
     ("models/layers/", "transformer"),
@@ -118,6 +121,11 @@ def _read(path: Path) -> str:
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _load_id2label_en() -> dict:
+    path = REPO_ROOT / "src" / "labels" / "id2label_en.json"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _hub_folder_for(rel_posix: str) -> Optional[str]:
@@ -247,7 +255,7 @@ def _rewrite_component(text: str, folder: str, stems: Set[str]) -> str:
         stem = Path(mod_path).name
         names = m.group(2)
         if stem in stems:
-            return f"from {stem} import {names}"
+            return f"from .{stem} import {names}"
         return m.group(0)
 
     text = re.sub(
@@ -260,27 +268,34 @@ def _rewrite_component(text: str, folder: str, stems: Set[str]) -> str:
         repl_local,
         text,
     )
-    text = re.sub(r"from \.(\w+) import", r"from \1 import", text)
     text = re.sub(
-        r"from \.\.([\w.]+) import (.+)",
-        lambda m: f"from {Path(m.group(1)).name} import {m.group(2)}",
+        r"from \.\.\.([\w.]+) import (.+)",
+        lambda m: (
+            f"from .{Path(m.group(1)).name} import {m.group(2)}"
+            if Path(m.group(1)).name in stems
+            else f"from {Path(m.group(1)).name} import {m.group(2)}"
+        ),
         text,
     )
     text = re.sub(
-        r"from \.\.\.([\w.]+) import (.+)",
-        lambda m: f"from {Path(m.group(1)).name} import {m.group(2)}",
+        r"from \.\.([\w.]+) import (.+)",
+        lambda m: (
+            f"from .{Path(m.group(1)).name} import {m.group(2)}"
+            if Path(m.group(1)).name in stems
+            else f"from {Path(m.group(1)).name} import {m.group(2)}"
+        ),
         text,
     )
     # utils_training / support cross-imports within transformer
     if folder == "transformer":
         text = re.sub(
             r"from \.\.\.utils_training\.(\w+) import",
-            r"from \1 import",
+            r"from .\1 import",
             text,
         )
         text = re.sub(
             r"from \.utils_training\.(\w+) import",
-            r"from \1 import",
+            r"from .\1 import",
             text,
         )
     return text
@@ -393,7 +408,7 @@ def _find_pipeline_class(text: str) -> str:
 
 
 def _primary_class_name(source_text: str, module_stem: str) -> str:
-    classes = re.findall(r"^class (\w+)\(", source_text, re.M)
+    classes = re.findall(r"^\s*class (\w+)\(", source_text, re.M)
     if not classes:
         return module_stem
     filtered = [c for c in classes if not c.endswith("Output")]
@@ -422,7 +437,7 @@ def _primary_class_name(source_text: str, module_stem: str) -> str:
 
 
 def _pipeline_components(pipeline_text: str) -> Set[str]:
-    known = {"transformer", "unet", "scheduler", "vae", "gnet", "denoiser", "conditioner"}
+    known = {"transformer", "unet", "scheduler", "vae", "decoder", "gnet", "denoiser", "conditioner"}
     found: Set[str] = set()
     init_m = re.search(r"def __init__\(\s*self,\s*([^)]+)\)", pipeline_text, re.DOTALL)
     if init_m:
@@ -830,6 +845,97 @@ Regenerate: `python scripts/build_community_pipelines.py`
     return report
 
 
+def build_jlt(out_dir: Path, lib_path: Path) -> BuildReport:
+    report = BuildReport(community="JLT")
+    src = lib_path / "src" / "diffusers"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
+
+    template_pipeline = lib_path / "templates" / "pipeline.py"
+    if not template_pipeline.is_file():
+        raise FileNotFoundError(f"Missing JLT Hub template: {template_pipeline}")
+    pipe_text = _read(template_pipeline)
+    _write(out_dir / "pipeline.py", pipe_text)
+    report.hub_files.append("pipeline.py")
+
+    (out_dir / "transformer").mkdir(parents=True, exist_ok=True)
+    (out_dir / "scheduler").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src / "models" / "transformers" / "transformer_jlt.py", out_dir / "transformer" / "transformer_jlt.py")
+    report.hub_files.append("transformer/transformer_jlt.py")
+
+    scheduler_config = {
+        "_class_name": "FlowMatchHeunDiscreteScheduler",
+        "_diffusers_version": "0.36.0",
+        "num_train_timesteps": 1000,
+        "shift": 1.0,
+        "stochastic_sampling": False,
+    }
+    _write(out_dir / "scheduler/scheduler_config.json", json.dumps(scheduler_config, indent=2) + "\n")
+    report.hub_files.append("scheduler/scheduler_config.json")
+
+    jlt_index = {
+        "_class_name": ["pipeline", "JLTPipeline"],
+        "_diffusers_version": "0.36.0",
+        "scheduler": ["diffusers", "FlowMatchHeunDiscreteScheduler"],
+        "transformer": ["transformer_jlt", "JLTTransformer2DModel"],
+        "vae": ["diffusers", "AutoencoderKLFlux2"],
+        "id2label": _load_id2label_en(),
+    }
+    _write(out_dir / "model_index.json.example", json.dumps(jlt_index, indent=2) + "\n")
+    report.hub_files.append("model_index.json.example")
+
+    readme = """# JLT — Hub custom pipeline
+
+Load checkpoints with **native Hugging Face diffusers** and this folder on the Hub:
+
+```python
+import importlib.util
+from pathlib import Path
+import torch
+
+model_dir = Path("./JLT-B-1-256")
+spec = importlib.util.spec_from_file_location("jlt_pipeline", model_dir / "pipeline.py")
+jlt_pipeline = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(jlt_pipeline)
+
+pipe = jlt_pipeline.JLTPipeline.from_pretrained(
+    str(model_dir),
+    local_files_only=True,
+    torch_dtype=torch.bfloat16,
+).to("cuda")
+
+image = pipe(
+    class_labels="golden retriever",
+    num_inference_steps=50,
+    guidance_scale=2.9,
+    noise_scale=1.0,
+    generator=torch.Generator(device="cuda").manual_seed(42),
+).images[0]
+```
+
+## Hub layout
+
+| Path | Purpose |
+| --- | --- |
+| `pipeline.py` | `JLTPipeline` (includes flow + FLUX.2 decode helpers) |
+| `transformer/transformer_jlt.py` | bundled `JLTTransformer2DModel` |
+| `scheduler/scheduler_config.json` | built-in `FlowMatchHeunDiscreteScheduler` |
+| `vae/` | bundled `AutoencoderKLFlux2` weights |
+
+Latent models use `in_channels=128` and require the bundled FLUX.2 VAE for PIL output.
+
+## ImageNet class labels
+
+Each variant keeps an English `id2label` map in `model_index.json` (DiT-style).
+
+Regenerate: `python scripts/build_community_pipelines.py`
+"""
+    _write(out_dir / "README.md", readme)
+    report.hub_files.append("README.md")
+    return report
+
+
 def build_one(lib_name: str, community: str) -> BuildReport:
     report = BuildReport(community=community)
     if community == "DiT":
@@ -840,6 +946,8 @@ def build_one(lib_name: str, community: str) -> BuildReport:
         return build_fit(OUT_ROOT / community, lib_path)
     if community == "Self-Flow":
         return build_selfflow(OUT_ROOT / community, lib_path)
+    if community == "JLT":
+        return build_jlt(OUT_ROOT / community, lib_path)
 
     src = lib_path / "src" / "diffusers"
     out_dir = OUT_ROOT / community
@@ -960,6 +1068,39 @@ Copy the full 1000-class `id2label` block from `BiliSakura/DiT-diffusers` when p
                 "- DDIM (DiT-MoE-S/B): `\"scheduler\": [\"diffusers\", \"DDIMScheduler\"]`\n"
                 "- Rectified-flow (DiT-MoE-XL/G): `\"scheduler\": [\"scheduling_flow_match_dit_moe\", \"DiTMoEFlowMatchScheduler\"]`\n"
                 "- Always include `\"id2label\"` with all 1000 ImageNet classes",
+            )
+            _write(out_dir / "README.md", readme_extra)
+
+    if community == "ProMoE":
+        promoe_index = {
+            "_class_name": ["pipeline", "ProMoEPipeline"],
+            "_diffusers_version": "0.36.0",
+            "scheduler": ["scheduling_flow_match_promoe", "ProMoEFlowMatchScheduler"],
+            "transformer": ["transformer_promoe", "ProMoETransformer2DModel"],
+            "vae": ["diffusers", "AutoencoderKL"],
+            "id2label": _load_id2label_en(),
+        }
+        _write(out_dir / "model_index.json.example", json.dumps(promoe_index, indent=2) + "\n")
+        readme_extra = _read(out_dir / "README.md")
+        if "ImageNet class labels" not in readme_extra:
+            id2label_section = """
+## ImageNet class labels
+
+Each variant keeps an English `id2label` map in `model_index.json` (SiT-style).
+
+- `pipe.id2label` — id → English label (comma-separated synonyms)
+- `pipe.get_label_ids("golden retriever")` — label string → class id
+- `pipe(class_labels="golden retriever", ...)` — class-conditional sampling with English labels
+- `pipe(class_labels=207, ...)` — class-conditional sampling with integer ids
+
+"""
+            readme_extra = readme_extra.replace("## `model_index.json`", id2label_section + "## `model_index.json`")
+            readme_extra = readme_extra.replace(
+                "Use `[\"_class_name\"] = [\"pipeline\", \"ProMoEPipeline\"]` and custom module stems for each component.",
+                "Use `[\"_class_name\"] = [\"pipeline\", \"ProMoEPipeline\"]` and custom module stems for each component.\n\n"
+                '- FlowMatch scheduler: `"scheduler": ["scheduling_flow_match_promoe", "ProMoEFlowMatchScheduler"]`\n'
+                '- VAE: `"vae": ["diffusers", "AutoencoderKL"]` with `stabilityai/sd-vae-ft-mse` weights or bundled safetensors\n'
+                "- ProMoE-TC presets: `ProMoE_TC_S`, `ProMoE_TC_B`, `ProMoE_TC_L`, `ProMoE_TC_XL` (see convert script)",
             )
             _write(out_dir / "README.md", readme_extra)
 

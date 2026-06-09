@@ -4,12 +4,12 @@
     "MVSplitDiTPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "transformer": [
-    "transformer_mvsplit_dit",
-    "MVSplitDiTTransformer2DModel"
-  ],
   "vae": [
     "diffusers",
     "AutoencoderKL"
+  ],
+  "transformer": [
+    "transformer_mvsplit_dit",
+    "ModelMixin"
   ]
 }

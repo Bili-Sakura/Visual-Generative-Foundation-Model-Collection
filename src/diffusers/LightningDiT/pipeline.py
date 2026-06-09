@@ -5,7 +5,6 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 from __future__ import annotations
 
 import inspect
-
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,16 +12,14 @@ import inspect
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Any
+from typing import List, Optional, Tuple, Union, Any
 
-import json
 import torch
 
 try:
     from diffusers.image_processor import VaeImageProcessor
     from diffusers.pipelines.pipeline_utils import DiffusionPipeline
     from diffusers.utils import BaseOutput
-    from diffusers.utils.torch_utils import randn_tensor
 except Exception:  # pragma: no cover
     class BaseOutput(dict):
         def __post_init__(self):
@@ -44,10 +41,8 @@ except Exception:  # pragma: no cover
         def postprocess(self, image, output_type="pil"):
             return image
 
-    def randn_tensor(shape, generator=None, device=None, dtype=None):
-        return torch.randn(shape, generator=generator, device=device, dtype=dtype)
-
 @dataclass
+
 class LightningDiTPipelineOutput(BaseOutput):
     images: Union[torch.FloatTensor, List]
 
@@ -73,85 +68,13 @@ class LightningDiTPipeline(DiffusionPipeline):
             kwargs["eta"] = eta
         return kwargs
 
-
     model_cpu_offload_seq = "transformer->vae"
     _optional_components = ["vae"]
 
-    def __init__(self, transformer, scheduler, vae=None, id2label: Optional[Dict[Union[int, str], str]] = None):
+    def __init__(self, transformer, scheduler, vae=None):
         super().__init__()
         self.register_modules(transformer=transformer, scheduler=scheduler, vae=vae)
         self.image_processor = VaeImageProcessor()
-        self._id2label = self._normalize_id2label(id2label)
-        self.labels = self._build_label2id(self._id2label)
-        self._labels_loaded_from_model_index = bool(self._id2label)
-
-    @staticmethod
-    def _normalize_id2label(id2label: Optional[Dict[Union[int, str], str]]) -> Dict[int, str]:
-        if not id2label:
-            return {}
-        return {int(key): value for key, value in id2label.items()}
-
-    @staticmethod
-    def _read_id2label_from_model_index(variant_path: Optional[str]) -> Dict[int, str]:
-        if not variant_path:
-            return {}
-        model_index_path = Path(variant_path).resolve() / "model_index.json"
-        if not model_index_path.exists():
-            return {}
-        raw = json.loads(model_index_path.read_text(encoding="utf-8"))
-        id2label = raw.get("id2label")
-        if not isinstance(id2label, dict):
-            return {}
-        return {int(key): value for key, value in id2label.items()}
-
-    @staticmethod
-    def _build_label2id(id2label: Dict[int, str]) -> Dict[str, int]:
-        label2id: Dict[str, int] = {}
-        for class_id, value in id2label.items():
-            for synonym in value.split(","):
-                synonym = synonym.strip()
-                if synonym:
-                    label2id[synonym] = int(class_id)
-        return dict(sorted(label2id.items()))
-
-    def _ensure_labels_loaded(self) -> None:
-        if self._labels_loaded_from_model_index:
-            return
-        loaded = self._read_id2label_from_model_index(getattr(self.config, "_name_or_path", None))
-        if loaded:
-            self._id2label = loaded
-            self.labels = self._build_label2id(self._id2label)
-        self._labels_loaded_from_model_index = True
-
-    @property
-    def id2label(self) -> Dict[int, str]:
-        self._ensure_labels_loaded()
-        return self._id2label
-
-    def get_label_ids(self, label: Union[str, List[str]]) -> List[int]:
-        self._ensure_labels_loaded()
-        if not self.labels:
-            raise ValueError("No labels loaded. Ensure `id2label` exists in model_index.json.")
-        labels = [label] if isinstance(label, str) else label
-        missing = [item for item in labels if item not in self.labels]
-        if missing:
-            preview = ", ".join(list(self.labels.keys())[:8])
-            raise ValueError(f"Unknown label(s): {missing}. Example valid labels: {preview}, ...")
-        return [self.labels[item] for item in labels]
-
-    def _normalize_class_labels(
-        self,
-        class_labels: Union[int, str, List[Union[int, str]], torch.LongTensor],
-    ) -> torch.LongTensor:
-        if isinstance(class_labels, torch.Tensor):
-            return class_labels.to(dtype=torch.long).reshape(-1)
-        if isinstance(class_labels, int):
-            class_labels = [class_labels]
-        elif isinstance(class_labels, str):
-            class_labels = self.get_label_ids(class_labels)
-        elif class_labels and isinstance(class_labels[0], str):
-            class_labels = self.get_label_ids(class_labels)  # type: ignore[arg-type]
-        return torch.tensor(class_labels, dtype=torch.long).reshape(-1)
 
     def _prepare_latents(
         self,
@@ -179,8 +102,11 @@ class LightningDiTPipeline(DiffusionPipeline):
         if latent_height % patch_size != 0 or latent_width % patch_size != 0:
             raise ValueError("Latent height and width must be divisible by the transformer patch_size.")
 
-        return randn_tensor(
-            (batch_size, self.transformer.config.in_channels, latent_height, latent_width),
+        return torch.randn(
+            batch_size,
+            self.transformer.config.in_channels,
+            latent_height,
+            latent_width,
             generator=generator,
             device=device,
             dtype=dtype,
@@ -198,10 +124,7 @@ class LightningDiTPipeline(DiffusionPipeline):
         eps, rest = model_output[:, :cfg_channels], model_output[:, cfg_channels:]
         cond_eps, uncond_eps = torch.chunk(eps, 2, dim=0)
         half_eps = uncond_eps + guidance_scale * (cond_eps - uncond_eps)
-        if rest.numel() == 0:
-            return half_eps
-        cond_rest, _ = torch.chunk(rest, 2, dim=0)
-        return torch.cat([half_eps, cond_rest], dim=1)
+        return torch.cat([half_eps, rest], dim=1)
 
     def _resolve_latent_stats(
         self,
@@ -246,7 +169,7 @@ class LightningDiTPipeline(DiffusionPipeline):
     @torch.no_grad()
     def __call__(
         self,
-        class_labels: Union[int, str, List[Union[int, str]], torch.LongTensor],
+        class_labels: Union[int, List[int], torch.LongTensor],
         height: int = 256,
         width: int = 256,
         num_inference_steps: int = 250,
@@ -266,12 +189,16 @@ class LightningDiTPipeline(DiffusionPipeline):
         device = self._execution_device
         model_dtype = next(self.transformer.parameters()).dtype
 
-        class_labels = self._normalize_class_labels(class_labels).to(device=device)
+        if isinstance(class_labels, int):
+            class_labels = [class_labels]
+        if not torch.is_tensor(class_labels):
+            class_labels = torch.tensor(class_labels, device=device, dtype=torch.long)
+        else:
+            class_labels = class_labels.to(device=device, dtype=torch.long)
         batch_size = class_labels.numel()
 
         latents = self._prepare_latents(batch_size, height, width, model_dtype, device, generator)
         timesteps = self.scheduler.set_timesteps(num_inference_steps, device=device, timestep_shift=timestep_shift)
-
         extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
 
         null_labels = torch.full_like(class_labels, self.transformer.config.num_classes)
@@ -339,6 +266,7 @@ class LightningDiTPipeline(DiffusionPipeline):
 
         image = self._decode_latents(latents)
         if self.vae is not None:
+            image = (image / 2 + 0.5).clamp(0, 1)
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         self.maybe_free_model_hooks()

@@ -21,7 +21,6 @@ pipe.to("cuda")
 | `pipeline.py` | `LightningDiTPipeline` |
 | `transformer/` | transformer_lightningdit.py |
 | `scheduler/` | scheduling_flow_match_lightningdit.py |
-| `train_lightningdit.py` | Training script (accelerate + flow-matching loss) |
 
 ## `model_index.json`
 

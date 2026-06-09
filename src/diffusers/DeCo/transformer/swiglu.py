@@ -1,25 +1,19 @@
 import torch
 import torch.nn as nn
 
-class _SwiGLU(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        hidden_dim: int,
-    ):
+
+class FeedForward(nn.Module):
+    """SwiGLU MLP matching the official DeCo checkpoint layout (w1/w2/w3)."""
+
+    def __init__(self, dim: int, hidden_dim: int):
         super().__init__()
-        self.w12 = nn.Linear(dim, hidden_dim*2, bias=False)
-        self.w3 = nn.Linear(hidden_dim, dim, bias=False)
+        hidden_dim = int(2 * hidden_dim / 3)
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+
     def forward(self, x):
-        x1, x2 = self.w12(x).chunk(2, dim=-1)
-        return self.w3(torch.nn.functional.silu(x1)*x2)
+        return self.w2(torch.nn.functional.silu(self.w1(x)) * self.w3(x))
 
 
-# try:
-# from xformers.ops import SwiGLU as aa
-#     SwiGLU = SwiGLU
-#     print("use xformers swiglu")
-# except:
-#     print("use slow swiglu")
-
-SwiGLU = _SwiGLU
+SwiGLU = FeedForward

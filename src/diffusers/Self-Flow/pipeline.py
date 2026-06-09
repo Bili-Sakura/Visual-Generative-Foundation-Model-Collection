@@ -403,6 +403,7 @@ class SelfFlowPipeline(DiffusionPipeline):
         tokens, token_ids = self.prepare_token_latents(batch_size, generator=generator, dtype=dtype, device=device)
 
         self.scheduler.set_timesteps(num_inference_steps, device=device)
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
         null_labels = torch.full_like(class_labels_tensor, self.transformer.config.num_classes - 1)
         guidance_low, guidance_high = guidance_interval
 

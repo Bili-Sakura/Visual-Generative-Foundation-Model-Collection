@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple
 
 import torch
 
@@ -43,17 +43,11 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
     order = 1
 
     @register_to_config
-    def __init__(
-        self,
-        path_type: str = "linear",
-        num_train_timesteps: int = 1000,
-        shift: float = 0.3,
-    ):
+    def __init__(self, path_type: str = "linear", num_train_timesteps: int = 1000):
         if path_type not in {"linear", "cosine"}:
             raise ValueError("path_type must be either 'linear' or 'cosine'.")
         self.path_type = path_type
         self.num_train_timesteps = num_train_timesteps
-        self.shift = shift
         self.timesteps = torch.linspace(0.0, 1.0, num_train_timesteps + 1, dtype=torch.float64)
 
     @staticmethod
@@ -66,11 +60,10 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         self,
         num_inference_steps: int,
         device: Optional[torch.device] = None,
-        timestep_shift: Optional[float] = None,
+        timestep_shift: float = 0.0,
     ):
-        shift = self.shift if timestep_shift is None else timestep_shift
         timesteps = torch.linspace(0.0, 1.0, num_inference_steps + 1, dtype=torch.float64)
-        timesteps = self._apply_timestep_shift(timesteps, shift)
+        timesteps = self._apply_timestep_shift(timesteps, timestep_shift)
         self.timesteps = timesteps.to(device=device)
         return self.timesteps
 
@@ -81,9 +74,7 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         sample: torch.Tensor,
         next_timestep: torch.Tensor,
         return_dict: bool = True,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> LightningDiTFlowMatchSchedulerOutput:
-        del generator
         sample_dtype = sample.dtype
         sample = sample.to(dtype=torch.float64)
         model_output = model_output.to(dtype=torch.float64)
@@ -103,9 +94,7 @@ class LightningDiTFlowMatchScheduler(SchedulerMixin, ConfigMixin):
         sample: torch.Tensor,
         next_timestep: torch.Tensor,
         return_dict: bool = True,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> LightningDiTFlowMatchSchedulerOutput:
-        del generator
         sample_dtype = sample.dtype
         sample = sample.to(dtype=torch.float64)
         model_output = model_output.to(dtype=torch.float64)

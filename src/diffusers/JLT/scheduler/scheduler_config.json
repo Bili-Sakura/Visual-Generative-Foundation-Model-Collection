@@ -1,6 +1,7 @@
 {
-  "_class_name": "FDLossFlowMatchScheduler",
+  "_class_name": "FlowMatchHeunDiscreteScheduler",
   "_diffusers_version": "0.36.0",
   "num_train_timesteps": 1000,
+  "shift": 1.0,
   "stochastic_sampling": false
 }

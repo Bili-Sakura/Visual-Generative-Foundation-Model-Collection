@@ -14,6 +14,7 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | EDM2 | [EDM2/](EDM2/) |
 | FD-Loss | [FD-Loss/](FD-Loss/) |
 | FiT | [FiT/](FiT/) |
+| JLT | [JLT/](JLT/) |
 | JiT | [JiT/](JiT/) |
 | LightningDiT | [LightningDiT/](LightningDiT/) |
 | MDT | [MDT/](MDT/) |
@@ -21,6 +22,7 @@ Regenerate: `python scripts/build_community_pipelines.py`
 | NiT | [NiT/](NiT/) |
 | PAE | [PAE/](PAE/) |
 | PixNerd | [PixNerd/](PixNerd/) |
+| ProMoE | [ProMoE/](ProMoE/) |
 | RAE | [RAE/](RAE/) |
 | RAEv2 | [RAEv2/](RAEv2/) |
 | REPA-E | [REPA-E/](REPA-E/) |

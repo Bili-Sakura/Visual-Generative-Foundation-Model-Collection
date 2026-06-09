@@ -5,7 +5,6 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 from __future__ import annotations
 
 import inspect
-
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +42,7 @@ except Exception:  # pragma: no cover
             return image
 
 @dataclass
+
 class LightningDiTPipelineOutput(BaseOutput):
     images: Union[torch.FloatTensor, List]
 
@@ -67,7 +67,6 @@ class LightningDiTPipeline(DiffusionPipeline):
         if eta is not None and "eta" in step_params:
             kwargs["eta"] = eta
         return kwargs
-
 
     model_cpu_offload_seq = "transformer->vae"
     _optional_components = ["vae"]
@@ -200,7 +199,6 @@ class LightningDiTPipeline(DiffusionPipeline):
 
         latents = self._prepare_latents(batch_size, height, width, model_dtype, device, generator)
         timesteps = self.scheduler.set_timesteps(num_inference_steps, device=device, timestep_shift=timestep_shift)
-
         extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
 
         null_labels = torch.full_like(class_labels, self.transformer.config.num_classes)
@@ -268,6 +266,7 @@ class LightningDiTPipeline(DiffusionPipeline):
 
         image = self._decode_latents(latents)
         if self.vae is not None:
+            image = (image / 2 + 0.5).clamp(0, 1)
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         self.maybe_free_model_hooks()

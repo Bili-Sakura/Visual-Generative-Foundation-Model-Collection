@@ -1,7 +1,7 @@
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.schedulers.scheduling_utils import SchedulerMixin
 
-from scheduling_adm_runtime import create_adm_diffusion_runtime
+from .scheduling_adm_runtime import create_adm_diffusion_runtime
 
 
 class ADMScheduler(SchedulerMixin, ConfigMixin):

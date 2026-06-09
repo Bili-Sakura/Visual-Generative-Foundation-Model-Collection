@@ -1,338 +1,232 @@
-# Copyright 2026 The HuggingFace Team.
+# Copyright 2026 The HuggingFace Team. All rights reserved.
+
 from __future__ import annotations
 
-from functools import lru_cache
+from dataclasses import dataclass
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
+import torch.nn.functional as F
+from torch.nn.functional import scaled_dot_product_attention
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.schedulers.scheduling_utils import SchedulerMixin, SchedulerOutput
 from diffusers.utils import BaseOutput
-from diffusers.utils.torch_utils import randn_tensor
+
+from .rmsnorm import RMSNorm
+from .rope import precompute_freqs_cis_ex2d as precompute_freqs_cis_2d
+from .transformer_deco import (
+    PatchEmbed,
+    TimestepEmbedder,
+    apply_rotary_emb,
+)
 
 
-def modulate(x, shift, scale):
+class DeCoT2ISwiGLU(nn.Module):
+    """Official DeCo-XXL t2i SwiGLU (w12/w3), distinct from c2i w1/w2/w3 layout."""
+
+    def __init__(self, dim: int, hidden_dim: int):
+        super().__init__()
+        self.w12 = nn.Linear(dim, hidden_dim * 2, bias=False)
+        self.w3 = nn.Linear(hidden_dim, dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x1, x2 = self.w12(x).chunk(2, dim=-1)
+        return self.w3(F.silu(x1) * x2)
+
+
+def _modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return x * (1 + scale) + shift
 
 
-class Attention(nn.Module):
-    def __init__(
-            self,
-            dim: int,
-            num_heads: int = 8,
-            qkv_bias: bool = False,
-            attn_drop: float = 0.,
-            proj_drop: float = 0.,
-    ) -> None:
+class TextEmbedder(nn.Module):
+    def __init__(self, in_channels: int, embed_dim: int, bias: bool = True):
         super().__init__()
-        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
+        self.proj = nn.Linear(in_channels, embed_dim, bias=bias)
+        self.norm = RMSNorm(embed_dim, eps=1e-6)
 
-        self.dim = dim
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.proj(x))
+
+
+class CrossAttention(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False, proj_drop: float = 0.0):
+        super().__init__()
+        assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.qkv_x = nn.Linear(dim, dim*3, bias=qkv_bias)
-        self.kv_y = nn.Linear(dim, dim*2, bias=qkv_bias)
-
-        self.q_norm = Norm(self.head_dim)
-        self.k_norm = Norm(self.head_dim)
-        self.attn_drop = nn.Dropout(attn_drop)
+        self.qkv_x = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.kv_y = nn.Linear(dim, dim * 2, bias=qkv_bias)
+        self.q_norm = RMSNorm(self.head_dim, eps=1e-6)
+        self.k_norm = RMSNorm(self.head_dim, eps=1e-6)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x: torch.Tensor, y, pos) -> torch.Tensor:
-        B, N, C = x.shape
-        qkv_x = self.qkv_x(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, kx, vx = qkv_x[0], qkv_x[1], qkv_x[2]
-        q = self.q_norm(q.contiguous())
-        kx = self.k_norm(kx.contiguous())
-        q, kx = apply_rotary_emb(q, kx, freqs_cis=pos)
-        kv_y = self.kv_y(y).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        ky, vy = kv_y[0], kv_y[1]
-        ky = self.k_norm(ky.contiguous())
+    def forward(self, x: torch.Tensor, y: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        batch_size, num_tokens, channels = x.shape
+        qkv_x = self.qkv_x(x).reshape(batch_size, num_tokens, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        query, key_x, value_x = qkv_x[0], qkv_x[1], qkv_x[2]
+        query = self.q_norm(query.contiguous())
+        key_x = self.k_norm(key_x.contiguous())
+        query, key_x = apply_rotary_emb(query, key_x, freqs_cis=pos)
 
-        k = torch.cat([kx, ky], dim=2)
-        v = torch.cat([vx, vy], dim=2)
+        kv_y = self.kv_y(y).reshape(batch_size, -1, 2, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        key_y, value_y = kv_y[0], kv_y[1]
+        key_y = self.k_norm(key_y.contiguous())
 
-        q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
-        k = k.view(B, self.num_heads, -1, C // self.num_heads).contiguous()  # B, H, N, Hc
-        v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
+        key = torch.cat([key_x, key_y], dim=2)
+        value = torch.cat([value_x, value_y], dim=2)
 
-        x = attention(q, k, v)
-        x = x.transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
+        query = query.view(batch_size, self.num_heads, -1, self.head_dim)
+        key = key.view(batch_size, self.num_heads, -1, self.head_dim).contiguous()
+        value = value.view(batch_size, self.num_heads, -1, self.head_dim).contiguous()
+        out = scaled_dot_product_attention(query, key, value, dropout_p=0.0)
+        out = out.transpose(1, 2).reshape(batch_size, num_tokens, channels)
+        return self.proj_drop(self.proj(out))
 
-class FlattenDiTBlock(nn.Module):
-    def __init__(self, hidden_size, groups,  mlp_ratio=4, ):
-        super().__init__()
-        self.norm1 = Norm(hidden_size, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=groups, qkv_bias=False)
-        self.norm2 = Norm(hidden_size, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
-        self.adaLN_modulation = nn.Sequential(
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
-
-    def forward(self, x, y, c, pos):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa), y, pos)
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
-
-class NerfEmbedder(nn.Module):
-    def __init__(self, in_channels, hidden_size_input, max_freqs):
-        super().__init__()
-        self.max_freqs = max_freqs
-        self.hidden_size_input = hidden_size_input
-        self.embedder = nn.Sequential(
-            nn.Linear(in_channels+max_freqs**2, hidden_size_input, bias=True),
-        )
-
-    @lru_cache
-    def fetch_pos(self, patch_size, device, dtype):
-        pos = precompute_freqs_cis_2d(self.max_freqs ** 2 * 2, patch_size, patch_size)
-        pos = pos[None, :, :].to(device=device, dtype=dtype)
-        return pos
-
-
-    def forward(self, inputs):
-        B, P2, C = inputs.shape
-        patch_size = int(P2 ** 0.5)
-        device = inputs.device
-        dtype = inputs.dtype
-        dct = self.fetch_pos(patch_size, device, dtype)
-        dct = dct.repeat(B, 1, 1)
-        inputs = torch.cat([inputs, dct], dim=-1)
-        inputs = self.embedder(inputs)
-        return inputs
-
-class NerfBlock(nn.Module):
-    def __init__(self, hidden_size_s, hidden_size_x, mlp_ratio=4):
-        super().__init__()
-        self.param_generator1 = nn.Sequential(
-            nn.Linear(hidden_size_s, 2*hidden_size_x**2*mlp_ratio, bias=True),
-        )
-        self.norm = Norm(hidden_size_x, eps=1e-6)
-        self.mlp_ratio = mlp_ratio
-    def forward(self, x, s):
-        batch_size, num_x, hidden_size_x = x.shape
-        mlp_params1 = self.param_generator1(s)
-        fc1_param1, fc2_param1 = mlp_params1.chunk(2, dim=-1)
-        fc1_param1 = fc1_param1.view(batch_size, hidden_size_x, hidden_size_x*self.mlp_ratio)
-        fc2_param1 = fc2_param1.view(batch_size, hidden_size_x*self.mlp_ratio, hidden_size_x)
-
-        # normalize fc1
-        normalized_fc1_param1 = torch.nn.functional.normalize(fc1_param1, dim=-2)
-        # mlp 1
-        res_x = x
-        x = self.norm(x)
-        x = torch.bmm(x, normalized_fc1_param1)
-        x = torch.nn.functional.silu(x)
-        x = torch.bmm(x, fc2_param1)
-        x = x + res_x
-        return x
-
-class NerfFinalLayer(nn.Module):
-    def __init__(self, hidden_size, out_channels):
-        super().__init__()
-        self.linear = nn.Linear(hidden_size, out_channels, bias=True)
-    def forward(self, x):
-        x = self.linear(x)
-        return x
 
 class TextRefineAttention(nn.Module):
-    def __init__(
-            self,
-            dim: int,
-            num_heads: int = 8,
-            qkv_bias: bool = False,
-            attn_drop: float = 0.,
-            proj_drop: float = 0.,
-    ) -> None:
+    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False, proj_drop: float = 0.0):
         super().__init__()
-        assert dim % num_heads == 0, 'dim should be divisible by num_heads'
-        self.dim = dim
+        assert dim % num_heads == 0, "dim should be divisible by num_heads"
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.qkv = nn.Linear(dim, dim*3, bias=qkv_bias)
-        self.q_norm = Norm(self.head_dim)
-        self.k_norm = Norm(self.head_dim)
-        self.attn_drop = nn.Dropout(attn_drop)
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.q_norm = RMSNorm(self.head_dim, eps=1e-6)
+        self.k_norm = RMSNorm(self.head_dim, eps=1e-6)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, N, C = x.shape
-        qkv_x = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv_x[0], qkv_x[1], qkv_x[2]
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = q.view(B, self.num_heads, -1, C // self.num_heads)  # B, H, N, Hc
-        k = k.view(B, self.num_heads, -1, C // self.num_heads).contiguous()  # B, H, N, Hc
-        v = v.view(B, self.num_heads, -1, C // self.num_heads).contiguous()
-        x = attention(q, k, v)
-        x = x.transpose(1, 2).reshape(B, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
+        batch_size, num_tokens, channels = x.shape
+        qkv = self.qkv(x).reshape(batch_size, num_tokens, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        query, key, value = qkv[0], qkv[1], qkv[2]
+        query = self.q_norm(query.contiguous())
+        key = self.k_norm(key.contiguous())
+        query = query.view(batch_size, self.num_heads, -1, self.head_dim)
+        key = key.view(batch_size, self.num_heads, -1, self.head_dim).contiguous()
+        value = value.view(batch_size, self.num_heads, -1, self.head_dim).contiguous()
+        out = scaled_dot_product_attention(query, key, value, dropout_p=0.0)
+        out = out.transpose(1, 2).reshape(batch_size, num_tokens, channels)
+        return self.proj_drop(self.proj(out))
+
+
+class T2IFlattenDiTBlock(nn.Module):
+    def __init__(self, hidden_size: int, groups: int, mlp_ratio: float = 4.0):
+        super().__init__()
+        self.norm1 = RMSNorm(hidden_size, eps=1e-6)
+        self.attn = CrossAttention(hidden_size, num_heads=groups, qkv_bias=False)
+        self.norm2 = RMSNorm(hidden_size, eps=1e-6)
+        self.mlp = DeCoT2ISwiGLU(hidden_size, int(hidden_size * mlp_ratio))
+        self.adaLN_modulation = nn.Sequential(nn.Linear(hidden_size, 6 * hidden_size, bias=True))
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor, c: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
+        x = x + gate_msa * self.attn(_modulate(self.norm1(x), shift_msa, scale_msa), y, pos)
+        return x + gate_mlp * self.mlp(_modulate(self.norm2(x), shift_mlp, scale_mlp))
+
 
 class TextRefineBlock(nn.Module):
-    def __init__(self, hidden_size, groups,  mlp_ratio=4, ):
+    def __init__(self, hidden_size: int, groups: int, mlp_ratio: float = 4.0):
         super().__init__()
-        self.norm1 = Norm(hidden_size, eps=1e-6)
+        self.norm1 = RMSNorm(hidden_size, eps=1e-6)
         self.attn = TextRefineAttention(hidden_size, num_heads=groups, qkv_bias=False)
-        self.norm2 = Norm(hidden_size, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        self.mlp = FeedForward(hidden_size, mlp_hidden_dim)
+        self.norm2 = RMSNorm(hidden_size, eps=1e-6)
+        self.mlp = DeCoT2ISwiGLU(hidden_size, int(hidden_size * mlp_ratio))
+        self.adaLN_modulation = nn.Sequential(nn.Linear(hidden_size, 6 * hidden_size, bias=True))
 
-        self.adaLN_modulation = nn.Sequential(
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
-
-    def forward(self, x, c):
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
+        x = x + gate_msa * self.attn(_modulate(self.norm1(x), shift_msa, scale_msa))
+        return x + gate_mlp * self.mlp(_modulate(self.norm2(x), shift_mlp, scale_mlp))
 
 
-class ResBlock(nn.Module):
-    """
-    A residual block that can optionally change the number of channels.
-    :param channels: the number of input channels.
-    """
+@dataclass
+class DeCoT2ITransformer2DModelOutput(BaseOutput):
+    sample: torch.Tensor
 
+
+class _DeCoT2ITransformerBackbone(nn.Module):
     def __init__(
         self,
-        channels
+        in_channels: int,
+        patch_size: int,
+        num_groups: int,
+        hidden_size: int,
+        num_encoder_blocks: int,
+        num_text_blocks: int,
+        txt_embed_dim: int,
+        txt_max_length: int,
     ):
         super().__init__()
-        self.channels = channels
-
-        self.in_ln = nn.LayerNorm(channels, eps=1e-6)
-        self.mlp = nn.Sequential(
-            nn.Linear(channels, channels, bias=True),
-            nn.SiLU(),
-            nn.Linear(channels, channels, bias=True),
-        )
-
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(channels, 3 * channels, bias=True)
-        )
-
-    def forward(self, x, y):
-        shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(y).chunk(3, dim=-1)
-        h = modulate(self.in_ln(x), shift_mlp, scale_mlp)
-        h = self.mlp(h)
-        return x + gate_mlp * h
-
-
-class FinalLayer(nn.Module):
-    """
-    The final layer adopted from DiT.
-    """
-    def __init__(self, model_channels, out_channels):
-        super().__init__()
-        self.norm_final = nn.LayerNorm(model_channels, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(model_channels, out_channels, bias=True)
-
-    def forward(self, x):
-        x = self.norm_final(x)
-        x = self.linear(x)
-        return x
-
-class SimpleMLPAdaLN(nn.Module):
-    """
-    The MLP for Diffusion Loss.
-    :param in_channels: channels in the input Tensor.
-    :param model_channels: base channel count for the model.
-    :param out_channels: channels in the output Tensor.
-    :param z_channels: channels in the condition.
-    :param num_res_blocks: number of residual blocks per downsample.
-    """
-
-    def __init__(
-        self,
-        in_channels,
-        model_channels,
-        out_channels,
-        z_channels,
-        num_res_blocks,
-        patch_size,
-        grad_checkpointing=False
-    ):
-        super().__init__()
-
         self.in_channels = in_channels
-        self.model_channels = model_channels
-        self.out_channels = out_channels
-        self.num_res_blocks = num_res_blocks
-        self.grad_checkpointing = grad_checkpointing
         self.patch_size = patch_size
+        self.hidden_size = hidden_size
+        self.num_groups = num_groups
+        self.num_encoder_blocks = num_encoder_blocks
+        self.txt_max_length = txt_max_length
 
-        self.cond_embed = nn.Linear(z_channels, patch_size**2*model_channels)
+        self.s_embedder = PatchEmbed(in_channels * patch_size**2, hidden_size, bias=True)
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        self.y_embedder = TextEmbedder(txt_embed_dim, hidden_size, bias=True)
+        self.y_pos_embedding = nn.Parameter(torch.randn(1, txt_max_length, hidden_size))
+        self.blocks = nn.ModuleList(
+            [T2IFlattenDiTBlock(hidden_size, num_groups) for _ in range(num_encoder_blocks)]
+        )
+        self.text_refine_blocks = nn.ModuleList(
+            [TextRefineBlock(hidden_size, num_groups) for _ in range(num_text_blocks)]
+        )
+        self.precompute_pos: dict[tuple[int, int], torch.Tensor] = {}
+        self._init_weights()
 
-        self.input_proj = nn.Linear(in_channels, model_channels)
-        
-        res_blocks = []
-        for i in range(num_res_blocks):
-            res_blocks.append(ResBlock(
-                model_channels,
-            ))
+    def _init_weights(self) -> None:
+        weight = self.s_embedder.proj.weight.data
+        nn.init.xavier_uniform_(weight.view([weight.shape[0], -1]))
+        nn.init.constant_(self.s_embedder.proj.bias, 0)
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        self.res_blocks = nn.ModuleList(res_blocks)
-        self.final_layer = FinalLayer(model_channels, out_channels)
+    def fetch_pos(self, height: int, width: int, device: torch.device) -> torch.Tensor:
+        key = (height, width)
+        if key not in self.precompute_pos:
+            self.precompute_pos[key] = precompute_freqs_cis_2d(self.hidden_size // self.num_groups, height, width)
+        return self.precompute_pos[key].to(device)
 
-        self.initialize_weights()
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        decoder: nn.Module,
+    ) -> torch.Tensor:
+        batch_size, _, height, width = x.shape
+        pos = self.fetch_pos(height // self.patch_size, width // self.patch_size, x.device)
+        x = F.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
+        t = self.t_embedder(t.view(-1)).view(batch_size, -1, self.hidden_size)
+        y = self.y_embedder(encoder_hidden_states) + self.y_pos_embedding.to(encoder_hidden_states.dtype)
+        condition = F.silu(t)
 
-    def initialize_weights(self):
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-        self.apply(_basic_init)
+        for block in self.text_refine_blocks:
+            y = block(y, condition)
 
-        # Zero-out adaLN modulation layers
-        for block in self.res_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+        s = self.s_embedder(x)
+        for block in self.blocks:
+            s = block(s, y, condition, pos)
+        s = F.silu(t + s)
 
-        # Zero-out output layers
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
+        batch_size, length, _ = s.shape
+        patch_pixels = x.reshape(batch_size * length, self.in_channels, self.patch_size**2).transpose(1, 2)
+        conditioning = s.view(batch_size * length, self.hidden_size)
+        decoded = decoder(patch_pixels, conditioning).sample
+        x = decoded.transpose(1, 2).reshape(batch_size, length, -1)
+        return F.fold(
+            x.transpose(1, 2).contiguous(),
+            (height, width),
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+        )
 
-    def forward(self, x, c):
-        """
-        Apply the model to an input batch.
-        :param x: an [N x C] Tensor of inputs.
-        :param t: a 1-D batch of timesteps.
-        :param c: conditioning from AR transformer.
-        :return: an [N x C] Tensor of outputs.
-        """
-        x = self.input_proj(x)
-        c = self.cond_embed(c)
-
-        y = c.reshape(c.shape[0], self.patch_size**2, -1)
-
-        if self.grad_checkpointing and not torch.jit.is_scripting():
-            for block in self.res_blocks:
-                x = checkpoint(block, x, y)
-        else:
-            for block in self.res_blocks:
-                x = block(x, y)
-
-        return self.final_layer(x)
 
 class DeCoT2ITransformer2DModel(ModelMixin, ConfigMixin):
     config_name = "config.json"
@@ -340,106 +234,77 @@ class DeCoT2ITransformer2DModel(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
         self,
-        in_channels: int = 4,
-        num_groups: int = 12,
-        hidden_size: int = 1152,
-        decoder_hidden_size: int = 64,
-        num_encoder_blocks: int = 18,
-        num_decoder_blocks: int = 4,
+        in_channels: int = 3,
+        patch_size: int = 16,
+        num_groups: int = 24,
+        hidden_size: int = 1536,
+        hidden_size_x: int = 32,
+        num_blocks: int = 19,
+        num_encoder_blocks: int = 16,
+        num_decoder_blocks: int = 3,
         num_text_blocks: int = 4,
-        patch_size: int = 2,
-        txt_embed_dim: int = 1024,
-        txt_max_length: int = 100,
+        num_cond_blocks: int = 16,
+        num_classes: int = 0,
+        learn_sigma: bool = True,
+        deep_supervision: int = 0,
+        sample_size: int = 512,
+        conditioning_type: str = "text",
+        nerf_mlpratio: int = 4,
+        decoder_hidden_size: int = 32,
+        txt_embed_dim: int = 2048,
+        txt_max_length: int = 128,
     ):
         super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = in_channels
-        self.hidden_size = hidden_size
-        self.num_groups = num_groups
-        self.decoder_hidden_size = decoder_hidden_size
-        self.num_encoder_blocks = num_encoder_blocks
-        self.num_decoder_blocks = num_decoder_blocks
-        self.num_blocks = self.num_encoder_blocks + self.num_decoder_blocks
-        self.num_text_blocks = num_text_blocks
-        self.patch_size = patch_size
-        self.txt_embed_dim = txt_embed_dim
-        self.txt_max_length = txt_max_length
-        self.s_embedder = Embed(in_channels*patch_size**2, hidden_size, bias=True)
-        self.x_embedder = NerfEmbedder(in_channels, decoder_hidden_size, max_freqs=8)
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = Embed(txt_embed_dim, hidden_size, bias=True, norm_layer=Norm)
-        self.y_pos_embedding = torch.nn.Parameter(
-            torch.randn(1, txt_max_length, hidden_size),
-            requires_grad=True
+        del hidden_size_x, nerf_mlpratio, num_blocks, num_cond_blocks, num_classes, learn_sigma, deep_supervision
+        if conditioning_type != "text":
+            raise ValueError("DeCoT2ITransformer2DModel only supports text conditioning (t2i).")
+
+        self.backbone = _DeCoT2ITransformerBackbone(
+            in_channels=in_channels,
+            patch_size=patch_size,
+            num_groups=num_groups,
+            hidden_size=hidden_size,
+            num_encoder_blocks=num_encoder_blocks,
+            txt_embed_dim=txt_embed_dim,
+            txt_max_length=txt_max_length,
+            num_text_blocks=num_text_blocks,
         )
 
-        self.blocks = nn.ModuleList([
-            FlattenDiTBlock(self.hidden_size, self.num_groups) for _ in range(self.num_encoder_blocks)
-        ])
-        
-        self.dec_net = SimpleMLPAdaLN(
-            in_channels=self.decoder_hidden_size,
-            model_channels=self.decoder_hidden_size,
-            out_channels=self.in_channels,  # for vlb loss
-            z_channels=self.hidden_size,
-            num_res_blocks=self.num_decoder_blocks,
-            patch_size=self.patch_size,
-            grad_checkpointing=False
-        )
+    @property
+    def in_channels(self) -> int:
+        return int(self.config.in_channels)
 
-        self.text_refine_blocks = nn.ModuleList([
-            TextRefineBlock(self.hidden_size, self.num_groups) for _ in range(self.num_text_blocks)
-        ])
-        self.initialize_weights()
-        self.precompute_pos = {}
+    def _prepare_timestep(
+        self, timestep: Union[torch.Tensor, float, int], batch_size: int, sample: torch.Tensor
+    ) -> torch.Tensor:
+        if not isinstance(timestep, torch.Tensor):
+            timestep = torch.tensor([timestep], device=sample.device, dtype=torch.float64)
+        timestep = timestep.to(device=sample.device, dtype=torch.float64)
+        if timestep.ndim == 0:
+            timestep = timestep[None]
+        if timestep.shape[0] == 1 and batch_size > 1:
+            timestep = timestep.repeat(batch_size)
+        return timestep
 
-    def fetch_pos(self, height, width, device):
-        if (height, width) in self.precompute_pos:
-            return self.precompute_pos[(height, width)].to(device)
-        else:
-            pos = precompute_freqs_cis_2d(self.hidden_size // self.num_groups, height, width).to(device)
-            self.precompute_pos[(height, width)] = pos
-            return pos
+    def forward(
+        self,
+        sample: torch.Tensor,
+        timestep: Union[torch.Tensor, float, int],
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        decoder: Optional[nn.Module] = None,
+        class_labels: Optional[torch.Tensor] = None,
+        return_dict: bool = True,
+    ) -> Union[DeCoT2ITransformer2DModelOutput, tuple[torch.Tensor]]:
+        if class_labels is not None:
+            raise ValueError("class_labels are not supported; use encoder_hidden_states for t2i DeCo models.")
+        if encoder_hidden_states is None:
+            raise ValueError("encoder_hidden_states must be provided for text-conditioned DeCo models.")
+        if decoder is None:
+            raise ValueError("decoder must be provided; load DeCoPatchDecoderModel as a separate pipeline component.")
 
-    def initialize_weights(self):
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.s_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.s_embedder.proj.bias, 0)
-
-        # Initialize timestep embedding MLP:
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-
-    def forward(self, x, t, y):
-        B, _, H, W = x.shape
-        x = torch.nn.functional.unfold(x, kernel_size=self.patch_size, stride=self.patch_size).transpose(1, 2)
-        xpos = self.fetch_pos(H // self.patch_size, W // self.patch_size, x.device)
-        ypos = self.y_pos_embedding
-        t = self.t_embedder(t.view(-1)).view(B, -1, self.hidden_size)
-        y = self.y_embedder(y).view(B, -1, self.hidden_size) + ypos.to(y.dtype)
-
-        condition = nn.functional.silu(t)
-        for i, block in enumerate(self.text_refine_blocks):
-            y = block(y, condition)
-
-        s = self.s_embedder(x)
-        for i in range(self.num_encoder_blocks):
-            s = self.blocks[i](s, y, condition, xpos)
-
-        s = torch.nn.functional.silu(t + s)
-        batch_size, length, _ = s.shape
-        x = x.reshape(batch_size * length, self.in_channels, self.patch_size ** 2 )
-        x = x.transpose(1, 2)
-        s = s.view(batch_size * length, self.hidden_size)
-        x = self.x_embedder(x)
-
-        x = self.dec_net(x, s)
-        
-        x = x.transpose(1, 2)
-        x = x.reshape(batch_size, length, -1)
-        x = torch.nn.functional.fold(x.transpose(1, 2).contiguous(),
-                                     (H, W),
-                                     kernel_size=self.patch_size,
-                                     stride=self.patch_size)
-        return x
+        batch_size = sample.shape[0]
+        t = self._prepare_timestep(timestep=timestep, batch_size=batch_size, sample=sample)
+        output = self.backbone(sample, t, encoder_hidden_states, decoder=decoder)
+        if not return_dict:
+            return (output,)
+        return DeCoT2ITransformer2DModelOutput(sample=output)

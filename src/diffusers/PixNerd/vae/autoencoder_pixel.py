@@ -6,7 +6,7 @@
 import torch
 import torch.nn as nn
 
-from ._hf_utils import get_hf_diffusers_attr
+from _hf_utils import get_hf_diffusers_attr
 
 ConfigMixin = get_hf_diffusers_attr("configuration_utils", "ConfigMixin")
 register_to_config = get_hf_diffusers_attr("configuration_utils", "register_to_config")

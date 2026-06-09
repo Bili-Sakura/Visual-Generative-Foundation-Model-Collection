@@ -43,7 +43,7 @@ except Exception:  # pragma: no cover
 
         return wrapper
 
-from .utils.layers import (
+from utils.layers import (
     TorchLinear, RMSNorm, SwiGLUMlp, PatchEmbedder, BottleneckPatchEmbed,
     apply_rotary_pos_emb, apply_rotary_pos_emb_partial,
     precompute_rope_freqs, precompute_rope_freqs_2d,

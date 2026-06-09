@@ -4,8 +4,6 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
-import inspect
-
 # Copyright 2026 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +17,8 @@ import inspect
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import inspect
 
 import json
 from pathlib import Path
@@ -323,6 +323,7 @@ class SiTPipeline(DiffusionPipeline):
             labels = torch.cat([class_labels_tensor, null_labels], dim=0)
 
         self.scheduler.set_timesteps(num_inference_steps, device=device)
+        extra_step_kwargs = self.prepare_extra_step_kwargs(self.scheduler, generator=generator)
         num_train_timesteps = self.scheduler.config.num_train_timesteps
 
         if getattr(self.scheduler.config, "stochastic_sampling", False):

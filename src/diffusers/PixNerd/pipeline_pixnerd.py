@@ -4,8 +4,6 @@ Load with native Hugging Face diffusers and trust_remote_code=True.
 
 from __future__ import annotations
 
-import inspect
-
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from diffusers.utils import BaseOutput
@@ -23,6 +21,8 @@ from diffusers.utils.torch_utils import randn_tensor
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+import inspect
 
 import json
 from pathlib import Path
@@ -98,7 +98,6 @@ class PixNerdPipeline(DiffusionPipeline):
         if eta is not None and "eta" in step_params:
             kwargs["eta"] = eta
         return kwargs
-
 
     model_cpu_offload_seq = "conditioner->transformer->vae"
     _callback_tensor_inputs = ["latents"]

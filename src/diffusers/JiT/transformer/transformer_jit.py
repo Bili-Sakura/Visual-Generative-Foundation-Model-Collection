@@ -14,7 +14,7 @@ from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import RMSNorm
 
-from jit_weights import JIT_PRESET_CONFIGS, remap_legacy_state_dict
+from .jit_weights import JIT_PRESET_CONFIGS, remap_legacy_state_dict
 
 
 def broadcat(tensors, dim=-1):

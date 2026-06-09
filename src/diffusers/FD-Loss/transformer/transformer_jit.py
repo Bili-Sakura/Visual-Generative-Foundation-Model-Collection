@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover - standalone testing without full diffuser
 
         return wrapper
 
-from .utils.layers import (
+from utils.layers import (
     precompute_rope_freqs, precompute_rope_freqs_2d,
     apply_rotary_pos_emb, apply_rotary_pos_emb_partial,
     modulate, RMSNorm, get_2d_sincos_pos_embed

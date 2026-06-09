@@ -4,16 +4,12 @@
     "NiTPipeline"
   ],
   "_diffusers_version": "0.31.0",
-  "transformer": [
-    "transformer_nit",
-    "NiTTransformer2DModel"
-  ],
   "vae": [
     "diffusers",
     "AutoencoderKL"
   ],
-  "scheduler": [
-    "scheduling_flow_match_nit",
-    "scheduling_flow_match_nit"
+  "transformer": [
+    "transformer_nit",
+    "ModelMixin"
   ]
 }
