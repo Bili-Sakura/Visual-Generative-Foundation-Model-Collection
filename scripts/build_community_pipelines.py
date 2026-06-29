@@ -77,6 +77,8 @@ from __future__ import annotations
 
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers
 from diffusers.utils import BaseOutput
 from diffusers.utils.torch_utils import randn_tensor
 """
@@ -249,6 +251,12 @@ def _rewrite_component(text: str, folder: str, stems: Set[str]) -> str:
         DEPENDENCY_REPLACEMENT + "\n",
         text,
     )
+    text = re.sub(
+        r"from (?:\.\.\.)?_hf import load_hf_diffusers_submodules\n\n"
+        r"_hf = load_hf_diffusers_submodules\([\s\S]*?\)\n(?:\w+ = _hf\[\"[^\"]+\"\]\.\w+\n)+",
+        DEPENDENCY_REPLACEMENT,
+        text,
+    )
     # diffusers.models.* / schedulers.* -> same-folder module
     def repl_local(m: re.Match) -> str:
         mod_path = m.group(1)
@@ -359,6 +367,11 @@ def _rewrite_pipeline(text: str, pipeline_class: str) -> str:
         text,
     )
     text = re.sub(r"^import importlib\.util\n", "", text, flags=re.M)
+    text = re.sub(
+        r"_hf = load_hf_diffusers_submodules\([\s\S]*?\)\n(?:\w+ = _hf\[\"[^\"]+\"\]\.\w+\n)+",
+        "",
+        text,
+    )
 
     text = _strip_custom_classmethods(text)
 
